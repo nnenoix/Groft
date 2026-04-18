@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import duckdb
+
+log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path(".claudeorch/memory_log.duckdb")
 
@@ -183,14 +186,39 @@ class MemoryManager:
         )
 
     async def compress(self, agent_name: str) -> bool:
-        path = self.agent_memory_path(agent_name)
+        return await self._compress_path(
+            path=self.agent_memory_path(agent_name),
+            log_agent_name=agent_name,
+            archive_prefix=agent_name,
+            default_title=f"# {agent_name}",
+        )
+
+    async def compress_shared(self) -> bool:
+        try:
+            return await self._compress_path(
+                path=self.shared_memory_path(),
+                log_agent_name="shared",
+                archive_prefix="shared",
+                default_title="# Shared Team Memory",
+            )
+        except Exception:
+            log.exception("compress_shared failed")
+            return False
+
+    async def _compress_path(
+        self,
+        path: Path,
+        log_agent_name: str,
+        archive_prefix: str,
+        default_title: str,
+    ) -> bool:
         bytes_before = await self._file_size(path)
         if bytes_before < self.COMPRESSION_THRESHOLD_BYTES:
             return False
         loop = asyncio.get_running_loop()
         original = await loop.run_in_executor(None, path.read_text, "utf-8")
         archive_path = self._archive_dir() / (
-            f"{agent_name}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.md"
+            f"{archive_prefix}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.md"
         )
         await loop.run_in_executor(None, archive_path.write_text, original, "utf-8")
         # delegate compression to Opus via CLI — Python never inspects the compressed text
@@ -206,7 +234,7 @@ class MemoryManager:
         except FileNotFoundError:
             await self._log(
                 operation="compress",
-                agent_name=agent_name,
+                agent_name=log_agent_name,
                 bytes_before=bytes_before,
                 bytes_after=bytes_before,
                 details={"success": False, "reason": "claude_cli_missing"},
@@ -218,7 +246,7 @@ class MemoryManager:
         if returncode != 0 or not compressed:
             await self._log(
                 operation="compress",
-                agent_name=agent_name,
+                agent_name=log_agent_name,
                 bytes_before=bytes_before,
                 bytes_after=bytes_before,
                 details={
@@ -228,13 +256,13 @@ class MemoryManager:
                 },
             )
             return False
-        title = self._extract_h1(original) or f"# {agent_name}"
+        title = self._extract_h1(original) or default_title
         new_body = f"{title}\n\n{compressed}\n"
         await loop.run_in_executor(None, path.write_text, new_body, "utf-8")
         bytes_after = await self._file_size(path)
         await self._log(
             operation="compress",
-            agent_name=agent_name,
+            agent_name=log_agent_name,
             bytes_before=bytes_before,
             bytes_after=bytes_after,
             details={"success": True, "archive": str(archive_path)},

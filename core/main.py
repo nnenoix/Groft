@@ -390,21 +390,40 @@ async def main() -> None:
             except Exception:
                 log.exception("handoff poll loop iteration failed")
 
+    async def memory_compress_loop() -> None:
+        # Periodic sweep of per-agent and shared memory. Threshold check lives
+        # inside MemoryManager so files under the limit are no-ops.
+        while True:
+            await asyncio.sleep(600.0)
+            try:
+                for name in orchestrator.known_roles():
+                    try:
+                        await memory_manager.compress(name)
+                    except Exception:
+                        log.exception("memory compress failed agent=%s", name)
+                try:
+                    await memory_manager.compress_shared()
+                except Exception:
+                    log.exception("memory compress shared failed")
+            except Exception:
+                log.exception("memory_compress_loop iteration crashed")
+
     inbox_task = asyncio.create_task(consume_opus_inbox())
     tasks_task = asyncio.create_task(poll_tasks_loop())
     handoff_task = asyncio.create_task(handoff_poll_loop())
+    memory_task = asyncio.create_task(memory_compress_loop())
 
     await process_guard.wait_for_stop()
 
     log.info("ClaudeOrch stopped")
 
     # per-step try/except so one teardown failure doesn't leak other resources
-    for bg_task in (inbox_task, tasks_task, handoff_task):
+    for bg_task in (inbox_task, tasks_task, handoff_task, memory_task):
         try:
             bg_task.cancel()
         except Exception:
             log.exception("teardown step failed: bg_task.cancel")
-    for bg_task in (inbox_task, tasks_task, handoff_task):
+    for bg_task in (inbox_task, tasks_task, handoff_task, memory_task):
         try:
             await bg_task
         except asyncio.CancelledError:
