@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
 from pathlib import Path
+
+from core.handoff_parser import extract_components
 
 log = logging.getLogger(__name__)
 
@@ -13,20 +14,6 @@ _MAX_FILES_LISTED = 200
 # fingerprint of the last successful scan, keyed by project_root. Lets the
 # periodic poll cheaply skip repeat calls without re-reading the markdown.
 _last_fingerprints: dict[Path, str] = {}
-
-_COMPONENT_CLASS_MARKERS = (
-    "component",
-    "card",
-    "sidebar",
-    "header",
-    "panel",
-    "drawer",
-    "dialog",
-    "modal",
-    "menu",
-)
-
-_PASCAL_RE = re.compile(r"^[A-Z][a-zA-Z0-9]*$")
 
 
 def _collect_files(root: Path) -> list[Path]:
@@ -65,45 +52,8 @@ def _format_inventory(project_root: Path, handoff_root: Path, files: list[Path])
     return "\n".join(lines)
 
 
-def _extract_components(html_files: list[Path]) -> list[str]:
-    """Extract component-like identifiers from HTML files.
-
-    Collects custom-element tag names (PascalCase or containing '-') and class
-    names whose lowercase form matches known UI-component markers. Parse
-    failures are logged and the file is skipped.
-    """
-    try:
-        from bs4 import BeautifulSoup
-    except ImportError:
-        log.warning("beautifulsoup4 not installed — skipping component extraction")
-        return []
-
-    found: set[str] = set()
-    for html_file in html_files:
-        try:
-            text = html_file.read_text(encoding="utf-8", errors="replace")
-            soup = BeautifulSoup(text, "html.parser")
-        except Exception:
-            log.warning("failed to parse %s", html_file, exc_info=True)
-            continue
-
-        for tag in soup.find_all(True):
-            name = tag.name
-            if not isinstance(name, str):
-                continue
-            if "-" in name or _PASCAL_RE.match(name):
-                found.add(name)
-            classes = tag.get("class") or []
-            if isinstance(classes, str):
-                classes = classes.split()
-            for cls in classes:
-                if not isinstance(cls, str):
-                    continue
-                lc = cls.lower()
-                if any(marker in lc for marker in _COMPONENT_CLASS_MARKERS):
-                    found.add(cls)
-
-    return sorted(found)
+def _rel_path(project_root: Path, path: Path) -> str:
+    return str(path.relative_to(project_root)) if path.is_relative_to(project_root) else str(path)
 
 
 async def scan_and_record_handoff(project_root: Path) -> list[str]:
@@ -122,12 +72,15 @@ async def scan_and_record_handoff(project_root: Path) -> list[str]:
     if not files:
         return []
 
-    html_files = [f for f in files if f.suffix.lower() == ".html"]
-    components = _extract_components(html_files) if html_files else []
+    components: list[dict] = []
+    for f in files:
+        if f.suffix.lower() == ".html":
+            components.extend(extract_components(f))
 
     fingerprint_parts = ["\n".join(str(f) for f in files)]
     if components:
-        fingerprint_parts.append("components:" + ",".join(components))
+        component_names = sorted(c["name"] for c in components)
+        fingerprint_parts.append("components:" + ",".join(component_names))
     file_fingerprint = "\n".join(fingerprint_parts)
 
     # cheap module-level dedupe — periodic poll runs every 30s, no need to
@@ -154,14 +107,15 @@ async def scan_and_record_handoff(project_root: Path) -> list[str]:
         fh.write(fingerprint_comment)
         if components:
             fh.write("\n## Обнаруженные компоненты\n\n")
-            for name in components:
-                fh.write(f"- `{name}`\n")
+            for comp in components:
+                rel = _rel_path(project_root, Path(comp["path"]))
+                classes_str = ", ".join(comp["classes"])
+                fh.write(f"- `{rel}` — `{comp['name']}` (tag={comp['tag']}, classes={classes_str})\n")
             fh.write("\n")
     _last_fingerprints[project_root] = file_fingerprint
     log.info("recorded %d files under %s", len(files), handoff_root)
 
     rels: list[str] = []
     for f in files:
-        rel = f.relative_to(project_root) if f.is_relative_to(project_root) else f
-        rels.append(str(rel))
+        rels.append(_rel_path(project_root, f))
     return rels
