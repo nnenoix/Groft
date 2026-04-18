@@ -151,6 +151,20 @@ MCP-мост `claudeorch-comms` (`communication/mcp_server.py`) экспозит
 ## UI-поверхность
 Папка `ui/` — Tauri + React приложение, основной интерфейс оркестратора. Запускается отдельно (`cd ui && npm run tauri dev`) или через корневой `start.sh` (`stop.sh` — для остановки). Коммуникация: WS `localhost:8765` + REST `localhost:8766`. Использует фреймы `roster`/`tasks`/`status`/`snapshot`/`message` из WS.
 
+## Разработка
+
+Воспроизводимое dev-окружение на чистом clone:
+
+```
+python -m venv .venv && .venv/Scripts/activate  # Windows
+pip install -r requirements-dev.txt
+pytest -v
+```
+
+Linux/macOS: `source .venv/bin/activate` вместо `.venv/Scripts/activate`.
+
+`requirements.txt` — рантайм-зависимости (pyyaml, duckdb, fastapi, uvicorn, websockets, aiosqlite, httpx, mcp, beautifulsoup4). `requirements-dev.txt` подтягивает их плюс pytest и pytest-asyncio. Конфиг pytest — в `pyproject.toml` (`[tool.pytest.ini_options]`).
+
 ## Интеграция с Claude Design
 
 ClaudeOrch детектирует handoff из Claude Design (папка `ork-handoff/`).
