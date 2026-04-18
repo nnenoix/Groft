@@ -19,3 +19,13 @@ tools: Read, Write, Edit, Bash
 - Если есть вопрос к frontend-dev — запиши в memory/shared.md
 
 Stack: Node.js, Express, PostgreSQL, JWT
+
+## Коммуникация
+Ты подключён к ClaudeOrch через MCP инструменты:
+- send_message(to, content) — написать другому агенту
+- get_messages() — проверить входящие сообщения
+- broadcast_message(content) — написать всем
+- get_connected_agents() — кто сейчас онлайн
+
+Проверяй get_messages() в начале каждой задачи.
+Если нужна информация от другого агента — используй send_message.

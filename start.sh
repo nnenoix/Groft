@@ -24,7 +24,7 @@ fi
 # 4. Запустить Claude Code с Channels в tmux
 echo "▶ Запуск Claude Code..."
 tmux new-session -d -s claudeorch \
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude \
+    "AGENT_NAME=opus CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude \
     --model claude-opus-4-7 \
     --dangerously-skip-permissions \
     --channels plugin:telegram@claude-plugins-official"
