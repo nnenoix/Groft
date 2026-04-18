@@ -305,3 +305,49 @@ API: `{ status, connected, sendMessage(obj), lastMessage }`. `status` — `'disc
 - `ui/src/hooks/useOrchestrator.ts` — roster/tasks handlers, REST fetch при reconnect.
 - `ui/src/components/ChatInput.tsx` — boolean-return контракт, красная подсветка + error message.
 - `ui/src/App.tsx` — handleChatSubmit возвращает boolean.
+
+---
+
+## Сессия UI-7 (2026-04-19) — модалка создания кастомного агента
+
+### Что сделал
+- `ui/src/views/AgentCreateView.tsx` (новый) — модалка с формой `name / role / model / tools / prompt`.
+  - **name**: `^[a-z][a-z0-9-]{1,30}$` (2–31 символов), inline-ошибка показывается после первого blur (не на каждый keystroke — меньше «прыжков» пока печатают).
+  - **role**: свободный текст, required (trim).
+  - **model**: `<select>`. На mount — `fetch('http://localhost:8766/agents/models')` с `AbortController` в cleanup; ответ валидируется (`body.models: string[]`). На сетевой/парс-ошибке — тихий фолбэк на `MODEL_OPTIONS` из `src/data/models.ts` (тот же список, что статический в бэке). Дефолт — первый элемент; при фетче сохраняем текущий выбор если всё ещё в списке.
+  - **tools**: 6 кнопок-чипов (`Read/Write/Edit/Bash/Grep/Glob`) — toggle `aria-pressed`, стили как `.chip.accent` когда активен. Пустой выбор разрешён.
+  - **prompt**: `<textarea rows=8 minHeight 8rem resize:vertical>`, required (trim).
+- Submit disabled пока не пройдёт регекс имени + role/prompt непустые + не идёт submit.
+- На submit — `invoke<void>("write_agent_file", { name, content })` с markdown'ом в формате из ТЗ.
+- Успех → вызывает `onCreated(name)` в родителе, ошибка → показывает inline-баннер (`tint-danger` + `status-stuck` border) внутри модалки, модалка остаётся, state сохранён.
+- Закрытие: backdrop click (с проверкой `e.target === e.currentTarget`), кнопка `X`, Escape (глобальный listener, только когда не submitting). Во время submit — все три пути заблокированы, чтобы не потерять ошибку/prevent dupe-submit.
+
+### Интеграция с `AgentsView.tsx`
+- Локальный state `creatorOpen` + `toast`.
+- Три точки открытия: `btn btn-primary` в header ("Новый агент"), пустая dashed-карточка в grid ("Создать агента"), и кнопка в `EmptyState` (первый запуск без агентов).
+- На успешное создание — toast `"Агент {name} создан"` рендерится fixed bottom-right с `tint-success` + `status-active` border, auto-dismiss через 2.8с (clearTimeout в cleanup).
+- Не добавлял новую библиотеку тостов — простой div fixed. Для error — inline в модалке, как разрешено ТЗ.
+
+### Reactivity
+Новый файл появляется в `.claude/agents/`, backend file-watcher шлёт `roster` WS-фрейм, `useOrchestrator.ts` уже диспатчит `SET_AGENT_ROSTER` — `useAgents()` перерендерит `AgentsView`, новая карточка подтянется. На фронте изменений не требовалось.
+
+### Решения
+- **Без `any`** в fetch-парсере: узкое сужение через `typeof`/`Array.isArray` + filter-type-guard `(m): m is string`.
+- **Инлайн-style** (`backdrop`/opacity transitions/error colors) — согласовано с остальным кодом (AgentDrawer, ComposerModal делают так же).
+- **`invoke` приходит из `@tauri-apps/api/core`** (как в `useChannels.ts`) — новых зависимостей нет.
+- **Не трогал `App.tsx`** — Escape в App.tsx закрывает только `composerOpen`; модалка Creator управляет своим Escape сама (stopPropagation не нужен, App проверяет `composerOpen` отдельно). Порядок listener'ов — родительский сработает тоже, но на composerOpen=false это no-op.
+- **Регистрация keydown listener с зависимостью `submitting`** — пересоздаём при старте submit, чтобы Escape не закрыл модалку в момент записи файла.
+
+### Build
+`npm run build` зелёный, 65 модулей (+25 vs UI-6 — много новых компонентов из промежуточных сессий CommandCenter / primitives / AgentDrawer которые уже были в master), ~9s, bundle 298.19 kB (gzip 88.20 kB), css 27.95 kB (gzip 6.78 kB). Diff vs pre-UI-7 master: +1 модуль (AgentCreateView), +~0.8 kB js. `npx tsc --noEmit` чистый.
+
+### Созданные файлы
+- `ui/src/views/AgentCreateView.tsx`
+
+### Изменённые файлы
+- `ui/src/views/AgentsView.tsx` — `+` button → open modal, onCreated → toast, three entry points.
+
+### Backend-контракт (на который полагается UI)
+- Tauri: `invoke<void>("write_agent_file", { name, content })` — rejects с string error если имя не матчит регекс или файл уже существует (backend-dev делает в `feature/ui7-agent-create-back`).
+- REST: `GET http://localhost:8766/agents/models` → `{"models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]}`.
+- Если REST недоступен (что ожидается при работе в feature-изолированной ветке без бэка) — UI использует статический список из `data/models.ts`, работает без деградации.
