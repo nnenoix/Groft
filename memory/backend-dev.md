@@ -4,6 +4,24 @@
 
 ## Sessions
 
+### 2026-04-19 — P5.1 MCP durable inbox via aiosqlite (task #35)
+
+Заменил in-memory `inbox: list[dict]` в `communication/mcp_server.py` на aiosqlite-backed queue, чтобы сообщения переживали рестарт MCP-подпроцесса.
+
+**`communication/mcp_server.py`:**
+- Удалил `inbox: list[dict]` и `_inbox_lock`.
+- `_PROJECT_ROOT = Path(__file__).resolve().parent.parent`, `_DB_PATH = _PROJECT_ROOT/".claudeorch"/"mcp_inbox.db"`.
+- `_db_conn: aiosqlite.Connection | None`, `_db_lock`. `_get_db()` лениво открывает коннект, создаёт каталог, ставит `PRAGMA journal_mode=WAL`, выполняет схему (`messages` + индекс `idx_messages_to_unread`), коммитит.
+- `_consume`: на каждое сообщение из `client.listen()` делает INSERT `(to_agent=AGENT_NAME, from_agent=msg.get("from"), content=json.dumps(msg, ensure_ascii=False), created_at=time.time())` и сразу commit.
+- `get_messages`: `BEGIN IMMEDIATE`, SELECT id+content WHERE `to_agent=? AND consumed_at IS NULL ORDER BY id`, `executemany UPDATE consumed_at` для всех строк, commit, возврат `json.dumps([json.loads(content),...])`. Пустой результат → `"Нет новых сообщений"` (сохраняет текущий контракт).
+- `send_message`/`broadcast_message` — без изменений в поведении, в БД не пишут (inbox — только incoming).
+- Teardown не добавлял: WAL mode закрывает корректно даже при ungraceful exit, в модуле и раньше не было явного shutdown.
+
+**Тест:** `tests/test_mcp_inbox.py::test_get_messages_consumes_rows` — monkeypatch `_DB_PATH` на tmp_path + `AGENT_NAME`, `_ensure_connected` заглушен. Вставляет строку напрямую, вызывает `mcp.get_messages()`, проверяет что `consumed_at` проставился и повторный вызов возвращает `"Нет новых сообщений"`. Получил доступ к tool-функции просто через `mcp.get_messages()` — `FastMCP` `@server.tool()` возвращает оригинальную функцию (не wrapper с `.fn`).
+
+**Тесты:** `tests/integration/test_spawn_flow.py` — 4/4 PASS. `tests/test_mcp_inbox.py` — 1/1 PASS.
+**Коммит:** `feat: P5.1 MCP inbox durable via aiosqlite (.claudeorch/mcp_inbox.db)`.
+
 ### 2026-04-19 — P3.2 HTML component parser (task #33)
 
 Extended `core/handoff.py` to extract component identifiers from HTML files in
