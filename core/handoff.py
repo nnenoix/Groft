@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # kept small on purpose — we inventory files, not parse design semantics
 _MAX_FILES_LISTED = 200
@@ -74,5 +77,5 @@ async def scan_and_record_handoff(project_root: Path) -> bool:
         fh.write("\n")
         fh.write(inventory)
         fh.write(fingerprint_comment)
-    print(f"[handoff] recorded {len(files)} files under {handoff_root}")
+    log.info("recorded %d files under %s", len(files), handoff_root)
     return True

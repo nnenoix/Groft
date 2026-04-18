@@ -91,7 +91,7 @@ function useWebSocket({
     try {
       ws = new WebSocket(url);
     } catch (err) {
-      log.warn("ws construct failed", err);
+      log.exception(err, "ws construct failed");
       scheduleReconnect();
       return;
     }
@@ -105,7 +105,7 @@ function useWebSocket({
         // successful handshake — reset backoff so the next drop retries fast
         reconnectAttemptsRef.current = 0;
       } catch (err) {
-        log.warn("ws register send failed", err);
+        log.exception(err, "ws register send failed");
         setStatus("reconnecting");
         scheduleReconnect();
       }
@@ -120,7 +120,7 @@ function useWebSocket({
           setLastMessage(parsed as Record<string, unknown>);
         }
       } catch (err) {
-        log.warn("ws frame parse failed", raw, err);
+        log.exception(err, "ws frame parse failed", raw);
       }
     };
 
@@ -181,7 +181,7 @@ function useWebSocket({
       ws.send(JSON.stringify(obj));
       return true;
     } catch (err) {
-      log.warn("ws send failed", err);
+      log.exception(err, "ws send failed");
       return false;
     }
   }, []);

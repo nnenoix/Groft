@@ -69,6 +69,9 @@ class CommunicationServer:
         self._uvicorn_task: asyncio.Task[None] | None = None
         # strong refs to fire-and-forget tasks so CPython can't GC them mid-run
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        # captured at start() so _unregister can trampoline back to the server
+        # loop via call_soon_threadsafe when invoked from a non-loop thread.
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._started = False
 
     async def start(self) -> None:
@@ -77,6 +80,7 @@ class CommunicationServer:
             return
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         loop = asyncio.get_running_loop()
+        self._loop = loop
         self._conn = await loop.run_in_executor(
             None, lambda: duckdb.connect(str(self._db_path))
         )
@@ -150,6 +154,7 @@ class CommunicationServer:
         with self._lock:
             self._registry.clear()
             self._status.clear()
+        self._loop = None
         self._started = False
 
     def get_connected_agents(self) -> list[str]:
@@ -261,15 +266,33 @@ class CommunicationServer:
                 self._status.pop(name, None)
                 removed = True
         if removed:
-            # fire-and-forget; sync method can't await, but roster push is best-effort
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
+            # fire-and-forget; sync method can't await, but roster push is best-effort.
+            # _unregister may be called from cross-thread paths (REST/MCP use
+            # _lock without the event loop), so hop back to the server loop
+            # via call_soon_threadsafe when the caller's loop isn't ours.
+            server_loop = self._loop
+            if server_loop is None:
                 return
-            task = loop.create_task(self._broadcast_roster())
-            # retain strong ref so CPython doesn't GC the task mid-flight
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
+            try:
+                current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+            if current_loop is server_loop:
+                task = server_loop.create_task(self._broadcast_roster())
+                # retain strong ref so CPython doesn't GC the task mid-flight
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
+            else:
+                def _schedule() -> None:
+                    task = server_loop.create_task(self._broadcast_roster())
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
+
+                try:
+                    server_loop.call_soon_threadsafe(_schedule)
+                except RuntimeError:
+                    # loop already closed — best-effort ends here
+                    return
 
     async def _broadcast_roster(self) -> None:
         # silent skip if the UI never connected; _forward_to_ui handles that too

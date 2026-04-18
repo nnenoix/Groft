@@ -184,22 +184,13 @@ function reducer(state: StoreState, action: Action): StoreState {
       // rather than append — appending re-adds the recent history each tick
       // and the buffer-trim hides the duplication only partially.
       const idx = state.agents.findIndex((a) => a.name === action.name);
+      // ignore snapshots for agents not yet in the roster — otherwise a stray
+      // frame conjures a phantom agent row that never gets real status updates.
+      if (idx === -1) return state;
       const trimmed =
         action.lines.length > TERMINAL_BUFFER
           ? action.lines.slice(action.lines.length - TERMINAL_BUFFER)
           : action.lines;
-      if (idx === -1) {
-        const created: AgentState = {
-          name: action.name,
-          role: action.name,
-          status: "idle",
-          currentAction: "",
-          currentTask: "",
-          model: "",
-          terminalOutput: trimmed,
-        };
-        return { ...state, agents: [...state.agents, created] };
-      }
       const nextAgents = state.agents.slice();
       const prev = nextAgents[idx];
       nextAgents[idx] = { ...prev, terminalOutput: trimmed };

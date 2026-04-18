@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from core.spawner import AgentSpawner
+
+log = logging.getLogger(__name__)
 
 
 class Orchestrator:
@@ -30,15 +33,19 @@ class Orchestrator:
         """
         roles = self.known_roles()
         if role_name not in roles:
-            print(f"[orchestrator] unknown role={role_name!r}; known={roles}")
+            log.warning("unknown role=%r; known=%s", role_name, roles)
             return False
         if role_name in self._spawner.active_agents:
-            print(f"[orchestrator] role already active role={role_name}")
+            log.info("role already active role=%s", role_name)
             return False
         return await self._spawner.spawn(role_name)
 
     async def despawn_role(self, role_name: str) -> bool:
         return await self._spawner.despawn(role_name)
+
+    async def restart_role(self, name: str) -> None:
+        await self.despawn_role(name)
+        await self.spawn_role(name)
 
     def active(self) -> dict[str, Any]:
         return dict(self._spawner.active_agents)

@@ -65,6 +65,19 @@ class AgentWatchdog:
         with self._lock:
             self._agents.pop(name, None)
 
+    def reset_state(self, name: str) -> None:
+        # called after a successful respawn so the timer doesn't immediately
+        # re-fire the restart path using stale last_change_time/*_fired flags
+        # from the prior lifecycle of the same agent name.
+        with self._lock:
+            state = self._agents.get(name)
+            if state is None:
+                return
+            state.last_change_time = datetime.now(timezone.utc)
+            state.wake_fired = False
+            state.restart_fired = False
+            state.notification_fired = False
+
     def set_wake_up_callback(self, fn: Callable[[str], Awaitable[None]]) -> None:
         self._wake_cb = fn
 

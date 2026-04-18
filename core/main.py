@@ -160,10 +160,21 @@ async def main() -> None:
             await spawner.despawn(agent_name)
         except Exception:
             log.exception("despawn failed during restart agent=%s", agent_name)
+        spawn_ok = False
         try:
-            await spawner.spawn(agent_name)
+            spawn_ok = await spawner.spawn(agent_name)
         except Exception:
             log.exception("spawn failed during restart agent=%s", agent_name)
+        # clear stale watchdog timers before re-register so the next tick
+        # treats the respawn as a fresh lifecycle, not an extension of the
+        # stuck window that triggered this restart.
+        if spawn_ok:
+            try:
+                agent_watchdog.reset_state(agent_name)
+            except Exception:
+                log.exception(
+                    "watchdog reset_state failed agent=%s", agent_name
+                )
         # tell the UI the agent is coming back so the badge flips to restarting
         try:
             await comm_client.status_for(agent_name, "restarting")
@@ -218,14 +229,50 @@ async def main() -> None:
     except Exception:
         log.exception("handoff scan failed")
 
-    # stash orchestrator on the client so future inbox-routed commands can reach it
-    comm_client.orchestrator = orchestrator  # type: ignore[attr-defined]
-
     await agent_watchdog.start()
 
+    async def _dispatch_inbox_command(content: str) -> None:
+        # slash-command surface for the UI → opus channel. Anything else is
+        # logged and ignored so stray chatter doesn't crash the loop.
+        stripped = content.strip()
+        if not stripped.startswith("/"):
+            log.info("opus-inbox non-command skipped: %r", content)
+            return
+        parts = stripped.split()
+        cmd = parts[0]
+        arg = parts[1] if len(parts) > 1 else None
+        if cmd == "/spawn":
+            if arg is None:
+                log.info("opus-inbox /spawn missing role")
+                return
+            try:
+                await orchestrator.spawn_role(arg)
+                await comm_client.status_for(arg, "active")
+            except Exception:
+                log.exception("opus-inbox /spawn failed role=%s", arg)
+        elif cmd == "/despawn":
+            if arg is None:
+                log.info("opus-inbox /despawn missing role")
+                return
+            try:
+                await orchestrator.despawn_role(arg)
+                await comm_client.status_for(arg, "active")
+            except Exception:
+                log.exception("opus-inbox /despawn failed role=%s", arg)
+        elif cmd == "/restart":
+            if arg is None:
+                log.info("opus-inbox /restart missing role")
+                return
+            try:
+                await orchestrator.restart_role(arg)
+                await comm_client.status_for(arg, "restarting")
+            except Exception:
+                log.exception("opus-inbox /restart failed role=%s", arg)
+        else:
+            log.info("opus-inbox unknown command: %r", stripped)
+
     async def consume_opus_inbox() -> None:
-        # Drain frames addressed to opus so UI `message` frames don't pile up
-        # on a dead socket. No routing yet — log so the trace is visible.
+        # Drain frames addressed to opus and dispatch slash commands from UI.
         try:
             async for frame in comm_client.listen():
                 mtype = frame.get("type")
@@ -234,15 +281,43 @@ async def main() -> None:
                 log.info(
                     "opus-inbox type=%s from=%s content=%r", mtype, sender, content
                 )
+                if mtype == "message" and isinstance(content, str):
+                    try:
+                        await _dispatch_inbox_command(content)
+                    except Exception:
+                        log.exception("opus-inbox dispatch crashed")
         except Exception:
             log.exception("opus-inbox listen stopped")
 
     async def poll_tasks_loop() -> None:
         # UI's Tasks view needs a periodic push; FS watch would be nicer but
         # keeping it trivial until there's a concrete cost signal.
+        # Hash the (id,status) tuples and skip re-push when nothing changed —
+        # UI store reconciles by id so redundant frames are pure waste.
+        from communication.task_parser import parse_tasks_dir
+
+        last_hash: int | None = None
+        first = True
         while True:
             try:
-                await comm_server.push_tasks_to_ui(PROJECT_ROOT / "tasks")
+                parsed = await asyncio.get_running_loop().run_in_executor(
+                    None, parse_tasks_dir, PROJECT_ROOT / "tasks"
+                )
+                fingerprint: list[tuple[str, str]] = []
+                for bucket in ("backlog", "current", "done"):
+                    for item in parsed.get(bucket, []):
+                        if (
+                            isinstance(item, dict)
+                            and isinstance(item.get("id"), str)
+                            and isinstance(item.get("status"), str)
+                        ):
+                            fingerprint.append((item["id"], item["status"]))
+                fingerprint.sort()
+                current_hash = hash(tuple(fingerprint))
+                if first or current_hash != last_hash:
+                    await comm_server.push_tasks_to_ui(PROJECT_ROOT / "tasks")
+                    last_hash = current_hash
+                    first = False
             except Exception:
                 log.exception("tasks-poll push failed")
             await asyncio.sleep(5.0)
