@@ -166,6 +166,9 @@ class CommunicationServer:
         await self._route_broadcast(sender, payload)
         await self._log_message(sender, None, "broadcast", payload)
 
+    async def broadcast_roster(self) -> None:
+        await self._broadcast_roster()
+
     def _build_app(self) -> FastAPI:
         app = FastAPI()
 
@@ -180,6 +183,16 @@ class CommunicationServer:
         async def status_snapshot() -> dict[str, str]:
             with self._lock:
                 return dict(self._status)
+
+        @app.get("/agents/models")
+        async def agents_models() -> dict[str, list[str]]:
+            return {
+                "models": [
+                    "claude-opus-4-7",
+                    "claude-sonnet-4-6",
+                    "claude-haiku-4-5-20251001",
+                ]
+            }
 
         @app.get("/tasks")
         async def tasks_snapshot() -> dict[str, Any]:
