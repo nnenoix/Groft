@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Literal
 
+from communication.client import CommunicationClient
+
 Status = Literal["active", "possibly_stuck", "stuck", "restarting"]
 
 
@@ -27,6 +29,7 @@ class AgentWatchdog:
         poll_interval: float = 5.0,
         possibly_stuck_after: float = 180.0,
         stuck_after: float = 300.0,
+        comm_client: CommunicationClient | None = None,
     ) -> None:
         self._poll_interval = poll_interval
         self._possibly_stuck_after = possibly_stuck_after
@@ -37,6 +40,7 @@ class AgentWatchdog:
         self._wake_cb: Callable[[str], Awaitable[None]] | None = None
         self._restart_cb: Callable[[str], Awaitable[None]] | None = None
         self._notify_cb: Callable[[str], Awaitable[None]] | None = None
+        self._comm_client = comm_client
 
     def register_agent(self, name: str, tmux_target: str) -> None:
         with self._lock:
@@ -111,6 +115,12 @@ class AgentWatchdog:
                 state.wake_fired = False
                 state.restart_fired = False
                 state.notification_fired = False
+                # fire-and-forget snapshot: telemetry must never block state updates
+                if self._comm_client is not None:
+                    try:
+                        asyncio.create_task(self._send_snapshot(output))
+                    except Exception:
+                        pass
                 return
             elapsed = (now - state.last_change_time).total_seconds()
             fire_wake = False
@@ -147,6 +157,14 @@ class AgentWatchdog:
                 await self._notify_cb(name)
             except Exception:
                 pass
+
+    async def _send_snapshot(self, output: str) -> None:
+        if self._comm_client is None:
+            return
+        try:
+            await self._comm_client.snapshot(output)
+        except Exception:
+            pass
 
     @staticmethod
     async def _capture(target: str) -> str:
