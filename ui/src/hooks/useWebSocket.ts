@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { createLogger } from "../utils/logger";
+
+const log = createLogger("useWebSocket");
 
 export type WSStatus =
   | "disconnected"
@@ -78,8 +81,8 @@ function useWebSocket({
     if (wsRef.current) {
       try {
         wsRef.current.close();
-      } catch {
-        /* noop */
+      } catch (err) {
+        log.debug("ws close before reopen", err);
       }
       wsRef.current = null;
     }
@@ -87,7 +90,8 @@ function useWebSocket({
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
-    } catch {
+    } catch (err) {
+      log.warn("ws construct failed", err);
       scheduleReconnect();
       return;
     }
@@ -100,7 +104,8 @@ function useWebSocket({
         setStatus("connected");
         // successful handshake — reset backoff so the next drop retries fast
         reconnectAttemptsRef.current = 0;
-      } catch {
+      } catch (err) {
+        log.warn("ws register send failed", err);
         setStatus("reconnecting");
         scheduleReconnect();
       }
@@ -114,8 +119,8 @@ function useWebSocket({
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           setLastMessage(parsed as Record<string, unknown>);
         }
-      } catch {
-        /* malformed frame dropped */
+      } catch (err) {
+        log.warn("ws frame parse failed", raw, err);
       }
     };
 
@@ -153,8 +158,8 @@ function useWebSocket({
       if (wsRef.current) {
         try {
           wsRef.current.close();
-        } catch {
-          /* noop */
+        } catch (err) {
+          log.debug("ws teardown noop", err);
         }
         wsRef.current = null;
       }
@@ -173,7 +178,8 @@ function useWebSocket({
     try {
       ws.send(JSON.stringify(obj));
       return true;
-    } catch {
+    } catch (err) {
+      log.warn("ws send failed", err);
       return false;
     }
   }, []);

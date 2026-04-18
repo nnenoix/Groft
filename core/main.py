@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import asyncio
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -17,6 +18,7 @@ from communication.server import CommunicationServer
 from core.error.error_handler import ErrorHandler
 from core.guard.process_guard import ProcessGuard
 from core.handoff import scan_and_record_handoff
+from core.logging_setup import configure_logging
 from core.orchestrator import Orchestrator
 from core.recovery.recovery_manager import RecoveryManager
 from core.session.checkpoint import Checkpoint, CheckpointManager
@@ -27,6 +29,8 @@ from memory.manager import MemoryManager
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yml"
+
+log = logging.getLogger(__name__)
 
 # defaults used when config.yml is missing or the tmux section is absent
 _DEFAULT_LEAD_TMUX_TARGET = "claudeorch:0"
@@ -40,10 +44,12 @@ def _load_tmux_config(path: Path) -> tuple[str, dict[str, str]]:
     except FileNotFoundError:
         return _DEFAULT_LEAD_TMUX_TARGET, dict(_DEFAULT_AGENT_TMUX_TARGETS)
     except OSError:
+        log.warning("config.yml unreadable, falling back to defaults", exc_info=True)
         return _DEFAULT_LEAD_TMUX_TARGET, dict(_DEFAULT_AGENT_TMUX_TARGETS)
     try:
         data: Any = yaml.safe_load(raw) or {}
     except yaml.YAMLError:
+        log.warning("config.yml parse failed, falling back to defaults", exc_info=True)
         return _DEFAULT_LEAD_TMUX_TARGET, dict(_DEFAULT_AGENT_TMUX_TARGETS)
     tmux_section = data.get("tmux") if isinstance(data, dict) else None
     if not isinstance(tmux_section, dict):
@@ -62,6 +68,7 @@ def _load_tmux_config(path: Path) -> tuple[str, dict[str, str]]:
 
 
 async def main() -> None:
+    configure_logging(log_dir=PROJECT_ROOT / ".claudeorch" / "logs")
     lead_tmux_target, agent_tmux_targets = _load_tmux_config(CONFIG_PATH)
 
     comm_server = CommunicationServer(
@@ -144,35 +151,38 @@ async def main() -> None:
     async def restart_claude_code(agent_name: str = "opus") -> None:
         # self-restart would kill the orchestrator mid-run; skip defensively.
         if agent_name == "opus":
-            print(f"[main] restart skipped for self: {agent_name}")
+            log.info("restart skipped for self: %s", agent_name)
             return
+        log.info("restart requested: %s", agent_name)
         try:
             await spawner.despawn(agent_name)
-        except Exception as exc:
-            print(f"[main] despawn failed during restart agent={agent_name}: {exc}")
+        except Exception:
+            log.exception("despawn failed during restart agent=%s", agent_name)
         try:
             await spawner.spawn(agent_name)
-        except Exception as exc:
-            print(f"[main] spawn failed during restart agent={agent_name}: {exc}")
+        except Exception:
+            log.exception("spawn failed during restart agent=%s", agent_name)
         # tell the UI the agent is coming back so the badge flips to restarting
         try:
             await comm_client.status_for(agent_name, "restarting")
-        except Exception as exc:
-            print(f"[main] status_for restarting failed agent={agent_name}: {exc}")
+        except Exception:
+            log.exception(
+                "status_for restarting failed agent=%s", agent_name
+            )
 
     async def notify_ui_stuck(agent_name: str) -> None:
         # typed status frame so the UI agent row turns stuck, not just the log feed.
         try:
             await comm_client.status_for(agent_name, "stuck")
-        except Exception as exc:
-            print(f"[main] status_for stuck failed agent={agent_name}: {exc}")
+        except Exception:
+            log.exception("status_for stuck failed agent=%s", agent_name)
 
     async def emit_watchdog_status(agent_name: str, status: str) -> None:
         try:
             await comm_client.status_for(agent_name, status)
-        except Exception as exc:
-            print(
-                f"[main] status_for failed agent={agent_name} status={status}: {exc}"
+        except Exception:
+            log.exception(
+                "status_for failed agent=%s status=%s", agent_name, status
             )
 
     async def wake_up_agent(agent_name: str) -> None:
@@ -190,8 +200,7 @@ async def main() -> None:
     result = await recovery_manager.initialize()
 
     if result.has_unfinished:
-        print("Обнаружена незавершённая сессия:")
-        print(result.message)
+        log.warning("unfinished session detected: %s", result.message)
         checkpoint = result.checkpoint
         if checkpoint is None:
             # defensive: RecoveryResult.has_unfinished implies a checkpoint,
@@ -200,12 +209,12 @@ async def main() -> None:
         if checkpoint is not None:
             await recovery_manager.restore_session(checkpoint)
     else:
-        print("ClaudeOrch готов к работе")
+        log.info("ClaudeOrch ready")
 
     try:
         await scan_and_record_handoff(PROJECT_ROOT)
-    except Exception as exc:
-        print(f"[handoff] scan failed: {exc}")
+    except Exception:
+        log.exception("handoff scan failed")
 
     # stash orchestrator on the client so future inbox-routed commands can reach it
     comm_client.orchestrator = orchestrator  # type: ignore[attr-defined]
@@ -220,11 +229,11 @@ async def main() -> None:
                 mtype = frame.get("type")
                 sender = frame.get("from") or "?"
                 content = frame.get("content")
-                print(
-                    f"[opus-inbox] type={mtype} from={sender} content={content!r}"
+                log.info(
+                    "opus-inbox type=%s from=%s content=%r", mtype, sender, content
                 )
-        except Exception as exc:
-            print(f"[opus-inbox] listen stopped: {exc}")
+        except Exception:
+            log.exception("opus-inbox listen stopped")
 
     async def poll_tasks_loop() -> None:
         # UI's Tasks view needs a periodic push; FS watch would be nicer but
@@ -232,8 +241,8 @@ async def main() -> None:
         while True:
             try:
                 await comm_server.push_tasks_to_ui(PROJECT_ROOT / "tasks")
-            except Exception as exc:
-                print(f"[tasks-poll] push failed: {exc}")
+            except Exception:
+                log.exception("tasks-poll push failed")
             await asyncio.sleep(5.0)
 
     inbox_task = asyncio.create_task(consume_opus_inbox())
@@ -241,43 +250,45 @@ async def main() -> None:
 
     await process_guard.wait_for_stop()
 
-    print("ClaudeOrch остановлен.")
+    log.info("ClaudeOrch stopped")
 
     # per-step try/except so one teardown failure doesn't leak other resources
     for bg_task in (inbox_task, tasks_task):
         try:
             bg_task.cancel()
         except Exception:
-            pass
+            log.exception("teardown step failed: bg_task.cancel")
     for bg_task in (inbox_task, tasks_task):
         try:
             await bg_task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
             pass
+        except Exception:
+            log.exception("teardown step failed: await bg_task")
     try:
         await spawner.despawn_all()
     except Exception:
-        pass
+        log.exception("teardown step failed: spawner.despawn_all")
     try:
         await recovery_manager.shutdown()
     except Exception:
-        pass
+        log.exception("teardown step failed: recovery_manager.shutdown")
     try:
         await comm_client.disconnect()
     except Exception:
-        pass
+        log.exception("teardown step failed: comm_client.disconnect")
     try:
         await comm_server.stop()
     except Exception:
-        pass
+        log.exception("teardown step failed: comm_server.stop")
     try:
         await git_manager.close()
     except Exception:
-        pass
+        log.exception("teardown step failed: git_manager.close")
     try:
         await memory_manager.close()
     except Exception:
-        pass
+        log.exception("teardown step failed: memory_manager.close")
 
 
 if __name__ == "__main__":

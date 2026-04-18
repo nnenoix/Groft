@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+
+log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path(".claudeorch/git_history.duckdb")
 
@@ -113,6 +116,11 @@ class GitManager:
             text=True,
         )
         if proc.returncode != 0:
+            log.warning(
+                "git worktree list failed rc=%s stderr=%s",
+                proc.returncode,
+                proc.stderr.strip(),
+            )
             return []
         prefix = "orchkerstr-"
         names: list[str] = []

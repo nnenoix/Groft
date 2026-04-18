@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,8 @@ from core.error.error_handler import ErrorHandler
 from core.guard.process_guard import ProcessGuard
 from core.session.checkpoint import Checkpoint, CheckpointManager
 from core.watchdog.agent_watchdog import AgentWatchdog
+
+log = logging.getLogger(__name__)
 
 DEFAULT_RECOVERY_LOG_PATH = Path(".claudeorch/recovery.duckdb")
 
@@ -97,7 +100,8 @@ class RecoveryManager:
                 self._agent_watchdog.register_agent(agent_name, target)
                 watchdog_registered += 1
             else:
-                # skipped watchdog registration — surfaced via details, not logging
+                # skipped watchdog registration — surfaced via details
+                log.debug("skipped watchdog registration: %s", agent_name)
                 missing.append(agent_name)
         await self._log_event(
             event="restored",
@@ -122,28 +126,28 @@ class RecoveryManager:
         try:
             await self._agent_watchdog.stop()
         except Exception:
-            pass
+            log.exception("recovery teardown failed: watchdog.stop")
         try:
             self._process_guard.uninstall()
         except Exception:
-            pass
+            log.exception("recovery teardown failed: process_guard.uninstall")
         if final_checkpoint is not None:
             try:
                 await self._checkpoint_manager.save(final_checkpoint)
             except Exception:
-                pass
+                log.exception("recovery teardown failed: checkpoint.save")
         try:
             await self._error_handler.close()
         except Exception:
-            pass
+            log.exception("recovery teardown failed: error_handler.close")
         try:
             await self.close()
         except Exception:
-            pass
+            log.exception("recovery teardown failed: self.close")
         try:
             await self._checkpoint_manager.close()
         except Exception:
-            pass
+            log.exception("recovery teardown failed: checkpoint_manager.close")
 
     async def close(self) -> None:
         if self._conn is not None:

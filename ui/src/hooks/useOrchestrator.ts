@@ -3,6 +3,9 @@ import useWebSocket, { type WSStatus } from "./useWebSocket";
 import { useDispatch } from "../store/agentStore";
 import type { AgentStatus } from "../store/agentStore";
 import type { Task, TaskStatus } from "../store/agentStore";
+import { createLogger } from "../utils/logger";
+
+const log = createLogger("useOrchestrator");
 
 const VALID_STATUSES = new Set<AgentStatus>([
   "active",
@@ -148,14 +151,17 @@ function useOrchestrator(): UseOrchestratorResult {
         const resp = await fetch(`${REST_URL}/agents`, {
           signal: ctrl.signal,
         });
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          log.warn("roster fetch non-ok", resp.status);
+          return;
+        }
         const body: unknown = await resp.json();
         if (!body || typeof body !== "object") return;
         const names = asStringArray((body as Record<string, unknown>).agents);
         if (!names) return;
         dispatch({ type: "SET_AGENT_ROSTER", names: cleanRoster(names) });
-      } catch {
-        /* network error / aborted — ignored; WS roster frame may still arrive */
+      } catch (err) {
+        log.warn("roster fetch failed", err);
       }
     })();
     return () => ctrl.abort();

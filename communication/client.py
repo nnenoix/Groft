@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, AsyncIterator
 
 import websockets
 from websockets.client import WebSocketClientProtocol
 from websockets.exceptions import ConnectionClosed
+
+log = logging.getLogger(__name__)
 
 
 class CommunicationClient:
@@ -26,7 +29,7 @@ class CommunicationClient:
             try:
                 await self._ws.close()
             except Exception:
-                pass
+                log.warning("client disconnect close failed", exc_info=True)
             self._ws = None
 
     async def send(self, to: str, content: str) -> None:
@@ -110,6 +113,7 @@ class CommunicationClient:
                     data = json.loads(raw)
                 except Exception:
                     # malformed frames are skipped — caller should not see them
+                    log.warning("client dropped malformed frame", exc_info=True)
                     continue
                 if isinstance(data, dict):
                     yield data

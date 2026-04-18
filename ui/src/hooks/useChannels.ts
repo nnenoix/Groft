@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { createLogger } from "../utils/logger";
+
+const log = createLogger("useChannels");
 
 export type Messenger = "telegram" | "discord" | "webhook";
 
@@ -61,8 +64,8 @@ function useChannels(): UseChannelsResult {
         if (mapped === "connected") {
           setCurrent("telegram");
         }
-      } catch {
-        /* initial probe failure is non-fatal — keep default not-connected */
+      } catch (err) {
+        log.info("telegram status unavailable", err);
       }
     })();
     return () => {
@@ -127,8 +130,8 @@ function useChannels(): UseChannelsResult {
       await invoke<string>("run_tmux_command", {
         command: "/telegram:access policy disabled",
       });
-    } catch {
-      /* best-effort — tmux may not be running */
+    } catch (err) {
+      log.warn("tmux disconnect failed", err);
     }
   }, []);
 

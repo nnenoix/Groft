@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,8 @@ from websockets.exceptions import ConnectionClosed
 from websockets.server import WebSocketServerProtocol
 
 from communication.task_parser import parse_tasks_dir
+
+log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path(".claudeorch/messages.duckdb")
 # snapshots forward to this agent name when connected; chosen per spec ("opus" is orchestrator)
@@ -103,21 +106,28 @@ class CommunicationServer:
                 self._ws_server.close()
                 await self._ws_server.wait_closed()
             except Exception:
-                pass
+                log.warning("server stop: ws_server close failed", exc_info=True)
             self._ws_server = None
         if self._uvicorn_server is not None:
             try:
                 self._uvicorn_server.should_exit = True
             except Exception:
-                pass
+                log.warning(
+                    "server stop: uvicorn should_exit failed", exc_info=True
+                )
         if self._uvicorn_task is not None:
             try:
                 await asyncio.wait_for(self._uvicorn_task, timeout=5.0)
             except Exception:
+                log.warning(
+                    "server stop: uvicorn wait_for failed", exc_info=True
+                )
                 try:
                     self._uvicorn_task.cancel()
                 except Exception:
-                    pass
+                    log.warning(
+                        "server stop: uvicorn task cancel failed", exc_info=True
+                    )
             self._uvicorn_task = None
             self._uvicorn_server = None
         if self._conn is not None:
@@ -127,7 +137,7 @@ class CommunicationServer:
             try:
                 await loop.run_in_executor(None, conn.close)
             except Exception:
-                pass
+                log.warning("server stop: duckdb close failed", exc_info=True)
         with self._lock:
             self._registry.clear()
             self._status.clear()
@@ -183,6 +193,7 @@ class CommunicationServer:
                 first = json.loads(raw)
             except Exception:
                 # protocol violation on first frame — 1008 policy violation
+                log.warning("bad handshake frame", exc_info=True)
                 await ws.close(code=1008, reason="invalid register")
                 return
             if not isinstance(first, dict) or first.get("type") != "register":
@@ -200,6 +211,9 @@ class CommunicationServer:
                     msg = json.loads(raw_msg)
                 except Exception:
                     # malformed JSON drops the frame but keeps the socket alive
+                    log.warning(
+                        "dropped malformed frame from %s", agent_name
+                    )
                     continue
                 if not isinstance(msg, dict):
                     continue
@@ -208,7 +222,9 @@ class CommunicationServer:
             pass
         except Exception:
             # never let a single connection take down the server
-            pass
+            log.exception(
+                "connection handler crashed for agent=%s", agent_name
+            )
         finally:
             if agent_name is not None:
                 self._unregister(agent_name, ws)
@@ -223,7 +239,7 @@ class CommunicationServer:
             try:
                 await old.close(code=1000, reason="reconnect")
             except Exception:
-                pass
+                log.debug("reconnect close failed for %s", name, exc_info=True)
         # push fresh roster to UI so the agent panel reflects the new connection
         await self._broadcast_roster()
 
@@ -354,6 +370,7 @@ class CommunicationServer:
         except ConnectionClosed:
             self._unregister(to, target)
         except Exception:
+            log.warning("direct route failed: agent=%s", to, exc_info=True)
             self._unregister(to, target)
 
     async def _forward_to_ui(self, payload: dict[str, Any]) -> None:
@@ -367,6 +384,7 @@ class CommunicationServer:
         except ConnectionClosed:
             self._unregister(UI_SINK_AGENT, target)
         except Exception:
+            log.warning("ui forward failed", exc_info=True)
             self._unregister(UI_SINK_AGENT, target)
 
     def _resolve_tmux_target(self, to: str) -> str | None:
@@ -399,12 +417,19 @@ class CommunicationServer:
                 stderr=asyncio.subprocess.DEVNULL,
             )
         except FileNotFoundError:
+            log.warning("tmux binary not found; cannot forward to %s", target)
             return False
         except Exception:
+            log.warning(
+                "tmux spawn failed for target=%s", target, exc_info=True
+            )
             return False
         try:
             await proc.communicate()
         except Exception:
+            log.warning(
+                "tmux communicate failed for target=%s", target, exc_info=True
+            )
             return False
         return proc.returncode == 0
 
@@ -420,6 +445,9 @@ class CommunicationServer:
             except ConnectionClosed:
                 self._unregister(name, ws)
             except Exception:
+                log.warning(
+                    "broadcast route failed: agent=%s", name, exc_info=True
+                )
                 self._unregister(name, ws)
 
     async def _log_message(
@@ -444,7 +472,7 @@ class CommunicationServer:
                 await loop.run_in_executor(None, self._execute_insert, row)
             except Exception:
                 # logging failures never propagate — messaging must keep flowing
-                pass
+                log.debug("message log insert failed", exc_info=True)
 
     def _execute_insert(self, row: tuple[Any, ...]) -> None:
         assert self._conn is not None

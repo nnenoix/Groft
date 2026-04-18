@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Literal
 
 from communication.client import CommunicationClient
+
+log = logging.getLogger(__name__)
 
 Status = Literal["active", "possibly_stuck", "stuck", "restarting"]
 
@@ -133,7 +136,9 @@ class AgentWatchdog:
                     try:
                         asyncio.create_task(self._send_snapshot(name, output))
                     except Exception:
-                        pass
+                        log.exception(
+                            "watchdog callback snapshot failed for %s", name
+                        )
                 if status_changed_to is not None and self._status_cb is not None:
                     await self._emit_status(name, status_changed_to)
                 return
@@ -163,17 +168,17 @@ class AgentWatchdog:
             try:
                 await self._wake_cb(name)
             except Exception:
-                pass
+                log.exception("watchdog callback wake failed for %s", name)
         if fire_restart and self._restart_cb is not None:
             try:
                 await self._restart_cb(name)
             except Exception:
-                pass
+                log.exception("watchdog callback restart failed for %s", name)
         if fire_notify and self._notify_cb is not None:
             try:
                 await self._notify_cb(name)
             except Exception:
-                pass
+                log.exception("watchdog callback notify failed for %s", name)
         if status_changed_to is not None:
             await self._emit_status(name, status_changed_to)
 
@@ -186,7 +191,7 @@ class AgentWatchdog:
         try:
             await self._status_cb(name, emitted)
         except Exception:
-            pass
+            log.exception("watchdog callback status failed for %s", name)
 
     async def _send_snapshot(self, agent_name: str, output: str) -> None:
         if self._comm_client is None:
@@ -195,7 +200,7 @@ class AgentWatchdog:
             # explicit agent keeps the UI from labelling every pane as "opus"
             await self._comm_client.snapshot(output, agent=agent_name)
         except Exception:
-            pass
+            log.exception("watchdog snapshot send failed for %s", agent_name)
 
     @staticmethod
     async def _capture(target: str) -> str:
