@@ -1,7 +1,12 @@
 import { useState } from "react";
 import useChannels, { type ChannelStatus } from "../hooks/useChannels";
 
-type TabKey = "telegram" | "discord" | "webhook";
+export type TabKey = "telegram" | "discord" | "webhook";
+
+export interface MessengerSettingsProps {
+  tab: TabKey;
+  onTabChange: (tab: TabKey) => void;
+}
 
 interface StatusDotProps {
   status: ChannelStatus;
@@ -301,8 +306,7 @@ function WebhookTab({ channels }: WebhookTabProps) {
   );
 }
 
-function MessengerSettings() {
-  const [tab, setTab] = useState<TabKey>("telegram");
+function MessengerSettings({ tab, onTabChange }: MessengerSettingsProps) {
   const channels = useChannels();
 
   const tabs: Array<{ key: TabKey; label: string }> = [
@@ -319,7 +323,7 @@ function MessengerSettings() {
           <TabButton
             key={t.key}
             active={tab === t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => onTabChange(t.key)}
             label={t.label}
           />
         ))}

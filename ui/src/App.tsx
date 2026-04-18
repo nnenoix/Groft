@@ -7,7 +7,7 @@ import ChatInput from "./components/ChatInput";
 import LogFeed from "./components/LogFeed";
 import TerminalGrid, { type TerminalData } from "./components/TerminalGrid";
 import AgentList from "./pages/AgentList";
-import MessengerSettings from "./pages/MessengerSettings";
+import MessengerSettings, { type TabKey } from "./pages/MessengerSettings";
 import useOrchestrator from "./hooks/useOrchestrator";
 import {
   useAgents,
@@ -24,12 +24,22 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
+const MESSENGER_ITEMS: Array<{ key: TabKey; icon: string; label: string }> = [
+  { key: "telegram", icon: "📱", label: "Telegram" },
+  { key: "discord", icon: "🎮", label: "Discord" },
+  { key: "webhook", icon: "🔗", label: "Webhook" },
+];
+
 function SidebarContent({
   view,
   agents,
+  messengerTab,
+  onMessengerTabChange,
 }: {
   view: ActivityView;
   agents: AgentState[];
+  messengerTab: TabKey;
+  onMessengerTabChange: (tab: TabKey) => void;
 }) {
   const tasks = useTasks();
   switch (view) {
@@ -67,9 +77,28 @@ function SidebarContent({
       return (
         <>
           <SectionHeader title="Messengers" />
-          <div className="text-text-muted text-sm px-4 leading-relaxed">
-            Telegram / Discord / Webhook — справа.
-          </div>
+          <ul className="px-2 space-y-0.5">
+            {MESSENGER_ITEMS.map((item) => {
+              const active = item.key === messengerTab;
+              return (
+                <li key={item.key}>
+                  <button
+                    type="button"
+                    onClick={() => onMessengerTabChange(item.key)}
+                    aria-pressed={active}
+                    className={
+                      active
+                        ? "w-full flex items-center gap-2 px-3 py-2 rounded text-sm bg-bg-secondary text-accent-primary font-medium"
+                        : "w-full flex items-center gap-2 px-3 py-2 rounded text-sm text-text-secondary hover:bg-bg-secondary hover:text-text-primary"
+                    }
+                  >
+                    <span className="text-base leading-none">{item.icon}</span>
+                    <span>{item.label}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </>
       );
     case "settings":
@@ -85,7 +114,24 @@ function SidebarContent({
               WebSocket:{" "}
               <span className="text-text-code">localhost:8765</span>
             </div>
-            <div className="text-text-dim">Редактирование — скоро</div>
+            <div>
+              Тема: <span className="text-text-code">Light</span>
+            </div>
+            <div>
+              Версия:{" "}
+              <span className="text-text-code">ClaudeOrch v0.1.0</span>
+            </div>
+            <div>
+              GitHub:{" "}
+              <a
+                href="https://github.com/nnenoix/orck"
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent-primary hover:underline"
+              >
+                nnenoix/orck
+              </a>
+            </div>
           </div>
         </>
       );
@@ -94,6 +140,7 @@ function SidebarContent({
 
 function App() {
   const [activeView, setActiveView] = useState<ActivityView>("agents");
+  const [messengerTab, setMessengerTab] = useState<TabKey>("telegram");
   const { status, sendMessage } = useOrchestrator();
   const agents = useAgents();
   const logs = useLogs();
@@ -128,12 +175,24 @@ function App() {
       <div className="flex-1 flex overflow-hidden">
         <ActivityBar activeView={activeView} onSelect={setActiveView} />
         <aside className="w-64 h-full bg-bg-sidebar border-r border-border overflow-y-auto shrink-0">
-          <SidebarContent view={activeView} agents={agents} />
+          <SidebarContent
+            view={activeView}
+            agents={agents}
+            messengerTab={messengerTab}
+            onMessengerTabChange={setMessengerTab}
+          />
         </aside>
         <main className="flex-1 flex flex-col overflow-hidden min-w-0">
           {isPageView ? (
             <div className="flex-1 overflow-hidden">
-              {activeView === "agents" ? <AgentList /> : <MessengerSettings />}
+              {activeView === "agents" ? (
+                <AgentList />
+              ) : (
+                <MessengerSettings
+                  tab={messengerTab}
+                  onTabChange={setMessengerTab}
+                />
+              )}
             </div>
           ) : (
             <>

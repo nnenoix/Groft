@@ -149,11 +149,13 @@ function AgentList() {
   return (
     <div className="h-full overflow-y-auto p-6 bg-bg-primary text-text-primary">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-lg font-semibold">Агенты</h1>
+        <h2 className="text-text-muted uppercase text-xs tracking-widest">
+          Agents
+        </h2>
         <button
           type="button"
           onClick={() => setMode({ kind: "create" })}
-          className="w-8 h-8 flex items-center justify-center rounded-full bg-accent-primary text-white hover:bg-accent-hover text-lg leading-none"
+          className="w-7 h-7 flex items-center justify-center rounded-full bg-accent-primary text-white hover:bg-accent-hover text-base leading-none"
           aria-label="Новый агент"
         >
           +
