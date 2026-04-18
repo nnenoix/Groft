@@ -7,7 +7,7 @@
 @layer base {
   html, body, #root {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    background-color: #1a1a1a;
-    color: #f0ece3;
+    background-color: #f5f0e8;
+    color: #1a1a1a;
   }
 }

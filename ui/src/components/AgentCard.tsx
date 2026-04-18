@@ -9,11 +9,11 @@ export interface AgentCardProps {
   model: string;
 }
 
-const STATUS_CLASSES: Record<AgentStatus, string> = {
-  active: "bg-status-active",
-  idle: "bg-status-idle",
-  stuck: "bg-status-stuck",
-  restarting: "bg-status-restarting",
+const STATUS_BORDER_COLOR: Record<AgentStatus, string> = {
+  active: "#2d7a4f",
+  idle: "#999999",
+  stuck: "#c0392b",
+  restarting: "#d97757",
 };
 
 function AgentCard({
@@ -25,19 +25,17 @@ function AgentCard({
   model,
 }: AgentCardProps) {
   return (
-    <div className="bg-bg-card border border-border rounded-lg p-4 hover:border-accent-primary transition-colors space-y-2">
-      <div className="flex items-center gap-2">
-        <span
-          className={`inline-block rounded-full w-2 h-2 ${STATUS_CLASSES[status]}`}
-        />
-        <span className="text-text-primary font-semibold">{name}</span>
-        <span className="text-text-muted text-sm">· {role}</span>
+    <div
+      className="bg-bg-card border border-border border-l-2 rounded-md p-3 shadow-sm hover:shadow-md transition-shadow space-y-1"
+      style={{ borderLeftColor: STATUS_BORDER_COLOR[status] }}
+    >
+      <div className="flex items-baseline gap-2">
+        <span className="text-text-primary font-semibold text-sm">{name}</span>
+        <span className="text-text-muted text-xs">· {role}</span>
       </div>
-      <div className="space-y-1">
-        <div className="text-text-primary text-sm">{currentAction}</div>
-        <div className="text-text-muted text-xs truncate">{currentTask}</div>
-      </div>
-      <div className="text-accent-primary text-xs font-medium">{model}</div>
+      <div className="text-text-secondary text-xs italic">{currentAction}</div>
+      <div className="text-text-dim text-xs truncate">{currentTask}</div>
+      <div className="text-text-code text-xs font-medium">{model}</div>
     </div>
   );
 }

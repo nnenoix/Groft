@@ -84,3 +84,53 @@
 
 ### Изменённые файлы (без новых)
 `ui/tailwind.config.js`, `ui/src/index.css`, `ui/src/App.tsx`, `ui/src/components/{AgentCard,TaskList,ChatInput,LogFeed}.tsx`.
+
+---
+
+## Сессия UI-3 (2026-04-18) — светлая тема + activity bar + terminals grid
+
+### Новые токены (`tailwind.config.js → theme.extend.colors`)
+Палитра полностью переработана под тёплый светлый UI (cream / paper):
+- `bg`: `primary #f5f0e8` (основной фон), `secondary #ede8df` (header / нижний блок), `card #ffffff` (карточки), `sidebar #e8e3da` (activity bar + sidebar), `terminal #f0ebe2` (тело терминал-карточек).
+- `text`: `primary #1a1a1a`, `secondary #3d3d3d`, `muted #6b6b6b`, `dim #999999`, `terminal #2d2d2d` (внутри терминалов), `code #c96442` (команды `npm/git/python`, модель в AgentCard).
+- `accent`: `primary #d97757` (Anthropic tangerine), `hover #c96442`, `dim #fce8e0`, `light #fdf3ee`.
+- `border: #ddd8cf` — плоский токен, как и раньше (не конфликтует с `border` utility).
+- `status`: `active #2d7a4f` (тёмно-зелёный под светлый фон), `idle #999999`, `stuck #c0392b`, `restarting #d97757`.
+
+### Layout
+```
+<div h-screen flex flex-col bg-bg-primary>
+  <Header />                // h-12, bg-bg-secondary
+  <div flex-1 flex>
+    <ActivityBar />         // w-12, bg-bg-sidebar, unicode-иконки
+    <Sidebar />             // w-64, bg-bg-sidebar, контент зависит от activeView
+    <MainPanel flex-1>
+      <TerminalGrid 2×2 />  // заголовок TERMINALS + grid-cols-2 grid-rows-2 gap-4 p-6
+      <BottomBar h-56>      // ChatInput w-[40%] | LogFeed flex-1
+    </MainPanel>
+  </div>
+</div>
+```
+
+Состояние `App` держит `activeView: "agents" | "tasks" | "logs" | "settings"` (`useState`). `ActivityBar` переключает, `Sidebar` рендерит соответствующий контент. Для `logs`/`settings` — текстовые заглушки.
+
+### Новые компоненты
+- `Header.tsx` — props `{ agentCount, systemActive }`. Лого-квадрат + название слева, `● Система активна` по центру (точка `text-status-active`), счётчик агентов справа.
+- `ActivityBar.tsx` — экспортирует `ActivityView`. Unicode-иконки `👥 ✓ 📋 ⚙`, активная кнопка `bg-accent-primary text-bg-card`, неактивная `text-text-muted hover:bg-bg-secondary`. Без иконочных пакетов.
+- `TerminalGrid.tsx` — props `{ terminals: TerminalData[] }`. Тип `TerminalData = { agent; status: AgentStatus; lines: string[] }`. Каждая строка парсится: `^(\d{2}:\d{2})\s(.*)$` → timestamp в `text-text-muted`, тело в `text-text-terminal`. Если `body` начинается с `npm `/`git `/`python ` — в `text-text-code` (оранжевый). Карточка: `bg-bg-terminal border border-border rounded-lg shadow-sm`, заголовок с цветной точкой статуса (inline `backgroundColor` из `STATUS_DOT_COLOR`).
+
+### Обновлённые компоненты
+- `AgentCard` — компактный белый вид (`bg-bg-card border border-border border-l-2 rounded-md p-3 shadow-sm hover:shadow-md`), левый акцент-бордер — цвет статуса через **inline `style={{ borderLeftColor }}`** (не класс). Модель теперь `text-text-code` (совпадает с accent-hover). Текущее действие — `italic text-text-secondary`.
+- `TaskList` — `space-y-0.5 px-2`, строка `hover:bg-bg-card`, stage перенесён в `ml-auto` (справа, `text-text-muted text-xs`).
+- `ChatInput` — textarea `bg-bg-card`, placeholder `text-text-dim`, кнопка `text-bg-card` (белый на оранжевом).
+- `LogFeed` — без структурных изменений, только контраст цветов перенастроен через обновлённые токены.
+
+### Решение по border-l цвету статуса
+Используется **inline style** (`style={{ borderLeftColor: map[status] }}`) вместо safelist. Причины: (1) проще — не трогаем конфиг, (2) Tailwind не генерирует `border-l-status-*` без safelist, (3) цвет динамический по одному props-полю. Класс `border-l-2` остаётся tailwind-утилитой для ширины. Тот же подход для точки статуса в `TerminalCard`.
+
+### Build
+`npm run build` зелёный, 36 модулей, ~5.5s, bundle 202.49 kB (gzip 63.71 kB), css 10.91 kB (gzip 2.88 kB). Рост (+4 модуля, +4 kB js, +1.5 kB css) за счёт Header/ActivityBar/TerminalGrid.
+
+### Созданные / изменённые файлы
+- Новые: `ui/src/components/Header.tsx`, `ActivityBar.tsx`, `TerminalGrid.tsx`.
+- Изменены: `ui/tailwind.config.js`, `ui/src/index.css`, `ui/src/App.tsx`, `ui/src/components/{AgentCard,TaskList,ChatInput,LogFeed}.tsx`.
