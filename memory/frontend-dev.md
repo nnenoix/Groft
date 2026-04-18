@@ -178,3 +178,86 @@
 - `ui/src-tauri/tauri.conf.json` — window minWidth/minHeight + увеличенный стартовый размер.
 
 Новых файлов не создавал.
+
+---
+
+## Сессия UI-5 (2026-04-18) — WebSocket + стор + живой UI
+
+### Протокол server.py (точные поля)
+Сверился с `/mnt/d/orchkerstr/communication/server.py` и `client.py`:
+- **register** — обязателен первым фреймом: `{"type":"register","agent":<name>}`. Никаких `role`/`id` — сервер читает только `type` и `agent`, при несоответствии закрывает сокет с кодом 1008.
+- **message** — `{"type":"message","from","to","content"}`. Маршрутизируется direct: если `to` не подключён, фрейм тихо дропается (логируется в duckdb).
+- **broadcast** — `{"type":"broadcast","from","content"}`. Рассылается всем кроме отправителя.
+- **snapshot** — `{"type":"snapshot","agent","terminal"}` — `terminal` это **одна строка** (потенциально с `\n`), **не** массив и не поле `lines`/`content`. Сервер перенаправляет snapshot только агенту `opus` (константа `SNAPSHOT_SINK_AGENT`). То есть UI по умолчанию snapshot не получает — только если SINK однажды переведут на `ui` или начнут рассылку. Всё равно обрабатываем: парсим `terminal` split по `\r?\n`, фильтруем пустые. На всякий случай поддержал также `lines: string[]` и `content: string` — безопасно для будущих расширений.
+- **status** — `{"type":"status","agent","status"}`. Сервер **не маршрутизирует** status — только сохраняет в `_status` и пишет в лог. То есть UI получит status только если оркестратор будет его броадкастить отдельно. Обработчик в `useOrchestrator` готов, но практически сейчас UPSERT_AGENT_STATUS срабатывать не будет до изменений на сервере.
+
+### Hook `useWebSocket` (`ui/src/hooks/useWebSocket.ts`)
+API: `{ status, connected, sendMessage(obj), lastMessage }`. `status` — `'disconnected'|'connecting'|'connected'|'reconnecting'`.
+- Подключается к `ws://localhost:8765`, после `onopen` сразу шлёт register.
+- Автореконнект через `setTimeout(3000)` при `onclose`/`onerror`/`catch` конструктора. Таймер в `useRef`, `shouldRunRef` предотвращает реконнект после unmount.
+- Замкнутая зависимость `connect ↔ scheduleReconnect` разрулена через `connectRef` (useRef + useEffect синхронизирует ref с последним `connect`).
+- **Буферизация send'а**: решил **silently drop** если сокет не OPEN (`sendMessage` возвращает `false`). Причины: (1) буфер усложняет (порядок, лимит, flush-гонки), (2) UI уже знает `connected`, может гейтить кнопку/textarea, (3) сообщения, отправленные в разрыве, почти всегда устаревают. Зафиксировал в комментарии к hook'у.
+- Cleanup в `useEffect` return: clear timer + `ws.close()` + `setStatus('disconnected')`.
+
+### Store `agentStore.tsx` (`ui/src/store/agentStore.tsx`)
+Выбрал **React Context + useReducer** (как предложил тимлид). Причины: без новых зависимостей, прозрачно в devtools, экшны типизированы discriminated union.
+- Файл `.tsx` а не `.ts` — провайдер возвращает JSX.
+- Типы `AgentState`, `LogEntry`, `Tasks`, `StoreState`, `Action`.
+- Action: `UPSERT_AGENT_STATUS | APPEND_TERMINAL | APPEND_LOG`.
+- Буферы: terminal = 100 строк на агента, logs = 200 записей глобально. Реализация — `merged.slice(merged.length - LIMIT)` если длина превышает.
+- `nextLogId` — module-level монотонный счётчик, отдаёт `log-N`. В `APPEND_LOG` payload без `id`, id проставляет reducer.
+- `UPSERT_AGENT_STATUS`: если агент есть — патч, `currentAction`/`currentTask` сохраняют прежнее значение если `undefined` в экшне. Если нет — добавляет минимальную запись (полезно для агентов, которых нет в initial mock).
+- Начальное состояние: те же 4 агента что в UI-4 (backend-dev / frontend-dev / tester / reviewer, те же модели), но статус всех `idle`, `terminalOutput: []`. Tasks — те же 3 секции что были захардкожены.
+- Хуки: `useAgents()`, `useLogs()`, `useTasks()`, `useDispatch()`. Провайдер `AgentStoreProvider`.
+- Контекст с value `{state, dispatch}` через `useMemo(..., [state])`.
+
+### Hook `useOrchestrator` (`ui/src/hooks/useOrchestrator.ts`)
+Склеивает `useWebSocket` + dispatch. В `useEffect([lastMessage, dispatch])` разбирает по `msg.type`:
+- `status` → UPSERT_AGENT_STATUS (валидирует `status` через `VALID_STATUSES` set).
+- `snapshot` → APPEND_TERMINAL. Парсит `terminal: string` → split `\r?\n` → filter non-empty.
+- `message` и `broadcast` → APPEND_LOG с полями `{timestamp: HH:MM:SS от new Date(), agent: from, action: content}`.
+Валидаторы `asString`, `isAgentStatus` — строгие, type-narrowing безопасный.
+Вызывается **один раз** в `App.tsx` (под провайдером). Возвращает `{connected, status, sendMessage}`.
+
+### ConnectionStatus (`ui/src/components/ConnectionStatus.tsx`)
+Простой компонент, маппинг `WSStatus` → `{label, dotClass, textClass}`:
+- connected → зелёный + "Connected" (`text-status-active`)
+- connecting/reconnecting → оранжевый + "Connecting..." / "Reconnecting..." (`text-accent-primary`)
+- disconnected → красный + "Offline" (`text-status-stuck`)
+Встроен в `Header`: заменил прежний статический «● Система активна». `Header` теперь принимает `connectionStatus: WSStatus` вместо `systemActive: boolean` (breaking — но Header используется только из App.tsx).
+
+### App.tsx
+- Убрал mock-массивы AGENTS/LOGS/TERMINALS/BACKLOG_TASKS/CURRENT_TASKS/DONE_TASKS — все данные теперь из стора.
+- Вверху вызывает `useOrchestrator()`, получает `{status, sendMessage}`. `useAgents()`, `useLogs()`, `useTasks()` — везде где нужны.
+- `terminals` собирается маппингом `agents` → `{agent, status, lines: terminalOutput}` прямо в рендере. `logEntries` маппится так же (`LogEntry.action` уже совпадает с полем стора).
+- `handleChatSubmit(text)` теперь `sendMessage({type:'message', from:'ui', to:'opus', content:text})`. Silently-drop если disconnected — пользователь видит Offline в хедере.
+- `SidebarContent` теперь принимает `agents` как prop (из `useAgents()` в App), tasks берёт через `useTasks()` внутри себя (простая оптимизация — не прокидывать лишнее).
+
+### main.tsx
+Обёрнут в `<AgentStoreProvider>` вокруг `<App/>`. Всё остальное без изменений. `App.tsx` сам `useOrchestrator()` вызывает — внутри провайдера.
+
+### Правки существующих компонентов
+- `Header.tsx` — props `{ agentCount, connectionStatus }`. Рендерит `<ConnectionStatus status={connectionStatus}/>` по центру.
+- `AgentCard`, `LogFeed`, `TerminalGrid`, `ChatInput`, `TaskList` — **без изменений API**. Только App.tsx кормит их реальными данными.
+
+### Build
+`npm run build` зелёный, 40 модулей (+4 vs UI-4: useWebSocket, useOrchestrator, agentStore, ConnectionStatus), ~6.5s, bundle 207.12 kB (gzip 65.18 kB), css 11.26 kB (gzip 2.97 kB). Рост +3.98 kB js за счёт новых hooks/store/компонента — в пределах ожиданий.
+
+### Устойчивость без сервера
+Если Python-сервер не поднят — `new WebSocket()` отрабатывает без exception, но сразу получает `onerror`/`onclose`. UI показывает "Reconnecting..." вечно, пытается каждые 3с. Состояние стора остаётся в initial (4 idle агента, пустые терминалы и логи). Ничего не падает. Проверено в build.
+
+### Созданные файлы
+- `ui/src/hooks/useWebSocket.ts`
+- `ui/src/hooks/useOrchestrator.ts`
+- `ui/src/store/agentStore.tsx`
+- `ui/src/components/ConnectionStatus.tsx`
+
+### Изменённые файлы
+- `ui/src/main.tsx` — обёртка в `AgentStoreProvider`.
+- `ui/src/App.tsx` — убраны mocks, подключение к стору + orchestrator.
+- `ui/src/components/Header.tsx` — `connectionStatus: WSStatus` вместо `systemActive: boolean`.
+
+### Открытые вопросы / TODO
+- Сервер не форвардит `status` другим клиентам (только логирует). Чтобы UPSERT_AGENT_STATUS реально срабатывал, оркестратору надо будет либо броадкастить статусы, либо расширить server.py.
+- `SNAPSHOT_SINK_AGENT = "opus"` — snapshot'ы идут только туда. Если UI должен их видеть, нужно либо менять sink, либо дублировать через broadcast.
+- `sendMessage` сейчас silently drop в offline. Если UX потребует — добавить буфер или визуальный фидбэк у ChatInput (пока достаточно индикатора в Header).

@@ -39,12 +39,16 @@ class CommunicationServer:
         rest_host: str = "localhost",
         rest_port: int = 8766,
         db_path: Path | str | None = None,
+        lead_tmux_target: str | None = None,
+        agent_tmux_targets: dict[str, str] | None = None,
     ) -> None:
         self._ws_host = ws_host
         self._ws_port = ws_port
         self._rest_host = rest_host
         self._rest_port = rest_port
         self._db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+        self._lead_tmux_target = lead_tmux_target
+        self._agent_tmux_targets: dict[str, str] = dict(agent_tmux_targets or {})
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._db_lock = asyncio.Lock()
         self._registry: dict[str, WebSocketServerProtocol] = {}
@@ -209,6 +213,8 @@ class CommunicationServer:
                 return
             await self._route_direct(to, msg)
             await self._log_message(sender, to, "message", msg)
+            if sender == "ui" and isinstance(content, str):
+                await self._forward_to_tmux(to, content)
         elif mtype == "broadcast":
             await self._route_broadcast(sender, msg)
             await self._log_message(sender, None, "broadcast", msg)
@@ -240,6 +246,45 @@ class CommunicationServer:
             self._unregister(to, target)
         except Exception:
             self._unregister(to, target)
+
+    def _resolve_tmux_target(self, to: str) -> str | None:
+        target = self._agent_tmux_targets.get(to)
+        if target is not None:
+            return target
+        return self._lead_tmux_target
+
+    async def _forward_to_tmux(self, to: str, content: str) -> None:
+        target = self._resolve_tmux_target(to)
+        if target is None:
+            return
+        # split on newlines so literal typing per-line + Enter preserves multi-line payloads
+        lines = content.split("\n")
+        for index, line in enumerate(lines):
+            if line:
+                if not await self._tmux_send(target, ["-l", "--", line]):
+                    return
+            if index < len(lines) - 1:
+                if not await self._tmux_send(target, ["Enter"]):
+                    return
+        await self._tmux_send(target, ["Enter"])
+
+    async def _tmux_send(self, target: str, extra: list[str]) -> bool:
+        args = ["tmux", "send-keys", "-t", target, *extra]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            return False
+        except Exception:
+            return False
+        try:
+            await proc.communicate()
+        except Exception:
+            return False
+        return proc.returncode == 0
 
     async def _route_broadcast(self, sender: str, payload: dict[str, Any]) -> None:
         with self._lock:

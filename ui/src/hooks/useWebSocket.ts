@@ -1,0 +1,180 @@
+import { useEffect, useRef, useState, useCallback } from "react";
+
+export type WSStatus =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "reconnecting";
+
+export interface UseWebSocketOptions {
+  url: string;
+  agentName: string;
+  reconnectDelayMs?: number;
+}
+
+export interface UseWebSocketResult {
+  status: WSStatus;
+  connected: boolean;
+  sendMessage: (obj: unknown) => boolean;
+  lastMessage: Record<string, unknown> | null;
+}
+
+/**
+ * Connects to the ClaudeOrch WebSocket server at `url`.
+ *
+ * Protocol notes (see communication/server.py):
+ *  - First frame MUST be `{"type":"register","agent":<name>}` — server closes
+ *    with code 1008 otherwise. No role/id fields are expected or used.
+ *  - Reconnect logic: on any close/error we schedule a retry after
+ *    `reconnectDelayMs` (default 3000ms). Status flips through the full
+ *    `disconnected → connecting → connected → reconnecting → connecting …` loop.
+ *  - Send buffer: messages sent while the socket is not OPEN are silently
+ *    dropped (returns `false`). We keep state simple; the user retries via UI.
+ */
+function useWebSocket({
+  url,
+  agentName,
+  reconnectDelayMs = 3000,
+}: UseWebSocketOptions): UseWebSocketResult {
+  const [status, setStatus] = useState<WSStatus>("disconnected");
+  const [lastMessage, setLastMessage] = useState<Record<string, unknown> | null>(
+    null,
+  );
+
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const shouldRunRef = useRef(true);
+  // use a ref for the latest connect() to break the circular dep between
+  // scheduleReconnect and connect without re-creating timers on every render
+  const connectRef = useRef<() => void>(() => {});
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleReconnect = useCallback(() => {
+    if (!shouldRunRef.current) return;
+    if (reconnectTimerRef.current !== null) return;
+    setStatus("reconnecting");
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      connectRef.current();
+    }, reconnectDelayMs);
+  }, [reconnectDelayMs]);
+
+  const connect = useCallback(() => {
+    if (!shouldRunRef.current) return;
+    // close any stale socket before opening a new one
+    if (wsRef.current) {
+      try {
+        wsRef.current.close();
+      } catch {
+        /* noop */
+      }
+      wsRef.current = null;
+    }
+    setStatus("connecting");
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url);
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      // register is mandatory first frame
+      try {
+        ws.send(JSON.stringify({ type: "register", agent: agentName }));
+        setStatus("connected");
+      } catch {
+        setStatus("reconnecting");
+        scheduleReconnect();
+      }
+    };
+
+    ws.onmessage = (event) => {
+      const raw = event.data;
+      if (typeof raw !== "string") return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          setLastMessage(parsed as Record<string, unknown>);
+        }
+      } catch {
+        /* malformed frame dropped */
+      }
+    };
+
+    ws.onerror = () => {
+      // onerror is followed by onclose; we just mark reconnecting here so the
+      // UI reflects the failure immediately.
+      if (shouldRunRef.current) {
+        setStatus("reconnecting");
+      }
+    };
+
+    ws.onclose = () => {
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+      }
+      if (shouldRunRef.current) {
+        scheduleReconnect();
+      } else {
+        setStatus("disconnected");
+      }
+    };
+  }, [url, agentName, scheduleReconnect]);
+
+  // keep latest connect() in a ref so timers call the current closure
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
+  useEffect(() => {
+    shouldRunRef.current = true;
+    connect();
+    return () => {
+      shouldRunRef.current = false;
+      clearReconnectTimer();
+      if (wsRef.current) {
+        try {
+          wsRef.current.close();
+        } catch {
+          /* noop */
+        }
+        wsRef.current = null;
+      }
+      setStatus("disconnected");
+    };
+    // intentionally run once per mount + url/agent change
+  }, [connect, clearReconnectTimer]);
+
+  const sendMessage = useCallback((obj: unknown): boolean => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // buffering would add complexity (order, size limit, flush races); we
+      // instead surface `connected` so callers can gate UI actions.
+      return false;
+    }
+    try {
+      ws.send(JSON.stringify(obj));
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  return {
+    status,
+    connected: status === "connected",
+    sendMessage,
+    lastMessage,
+  };
+}
+
+export default useWebSocket;

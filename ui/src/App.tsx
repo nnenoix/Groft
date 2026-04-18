@@ -1,151 +1,18 @@
 import { useState } from "react";
 import Header from "./components/Header";
 import ActivityBar, { type ActivityView } from "./components/ActivityBar";
-import AgentCard, { type AgentCardProps } from "./components/AgentCard";
-import TaskList, { type Task } from "./components/TaskList";
+import AgentCard from "./components/AgentCard";
+import TaskList from "./components/TaskList";
 import ChatInput from "./components/ChatInput";
-import LogFeed, { type LogEntry } from "./components/LogFeed";
+import LogFeed from "./components/LogFeed";
 import TerminalGrid, { type TerminalData } from "./components/TerminalGrid";
-
-const AGENTS: AgentCardProps[] = [
-  {
-    name: "backend-dev",
-    role: "backend",
-    status: "active",
-    currentAction: "Пишет auth middleware",
-    currentTask: "AUTH-1: Авторизация",
-    model: "sonnet-4-6",
-  },
-  {
-    name: "frontend-dev",
-    role: "frontend",
-    status: "active",
-    currentAction: "Создаёт LoginForm",
-    currentTask: "UI-2: Dashboard",
-    model: "sonnet-4-6",
-  },
-  {
-    name: "tester",
-    role: "test",
-    status: "idle",
-    currentAction: "Ожидает",
-    currentTask: "—",
-    model: "haiku-4-5",
-  },
-  {
-    name: "reviewer",
-    role: "review",
-    status: "idle",
-    currentAction: "Ожидает",
-    currentTask: "—",
-    model: "sonnet-4-6",
-  },
-];
-
-const BACKLOG_TASKS: Task[] = [
-  {
-    id: "b1",
-    title: "AUTH-1: Авторизация",
-    stage: "",
-    status: "pending",
-  },
-  {
-    id: "b2",
-    title: "UI-2: Dashboard",
-    stage: "",
-    status: "pending",
-  },
-];
-
-const CURRENT_TASKS: Task[] = [
-  {
-    id: "c1",
-    title: "HEALTH-1: /health endpoint",
-    stage: "",
-    status: "active",
-  },
-];
-
-const DONE_TASKS: Task[] = [
-  {
-    id: "d1",
-    title: "INIT-1: Структура проекта",
-    stage: "",
-    status: "done",
-  },
-];
-
-const LOGS: LogEntry[] = [
-  {
-    id: "l1",
-    timestamp: "12:04:11",
-    agent: "backend-dev",
-    action: "Создал server.js, добавил /health",
-  },
-  {
-    id: "l2",
-    timestamp: "12:05:47",
-    agent: "tester",
-    action: "Запустил smoke-тест: GET /health → 200 OK",
-  },
-  {
-    id: "l3",
-    timestamp: "12:07:02",
-    agent: "frontend-dev",
-    action: "Начал работу над UI-3, редизайн в светлую тему",
-  },
-];
-
-const TERMINALS: TerminalData[] = [
-  {
-    agent: "backend-dev",
-    status: "active",
-    lines: [
-      "10:23 npm run dev",
-      "10:23 Server listening on :3000",
-      "10:24 GET /health 200",
-      "10:24 POST /api/auth 401",
-      "▌",
-    ],
-  },
-  {
-    agent: "frontend-dev",
-    status: "active",
-    lines: [
-      "10:22 npm install react-hook-form",
-      "10:22 added 3 packages in 2s",
-      "10:23 Creating LoginForm.tsx",
-      "10:24 vite hmr update /src/LoginForm.tsx",
-      "▌",
-    ],
-  },
-  {
-    agent: "tester",
-    status: "idle",
-    lines: [
-      "10:20 npm test",
-      "10:20 PASS  tests/health.test.js",
-      "10:20 Tests: 6 passed, 6 total",
-      "10:21 Ожидает изменений...",
-      "▌",
-    ],
-  },
-  {
-    agent: "reviewer",
-    status: "idle",
-    lines: [
-      "10:18 git fetch origin",
-      "10:18 git log --oneline master..HEAD",
-      "10:19 No pending PRs",
-      "10:19 Ожидает code review...",
-      "▌",
-    ],
-  },
-];
-
-function handleChatSubmit(text: string) {
-  console.log("chat submit:", text);
-}
+import useOrchestrator from "./hooks/useOrchestrator";
+import {
+  useAgents,
+  useLogs,
+  useTasks,
+  type AgentState,
+} from "./store/agentStore";
 
 function SectionHeader({ title }: { title: string }) {
   return (
@@ -155,15 +22,30 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
-function SidebarContent({ view }: { view: ActivityView }) {
+function SidebarContent({
+  view,
+  agents,
+}: {
+  view: ActivityView;
+  agents: AgentState[];
+}) {
+  const tasks = useTasks();
   switch (view) {
     case "agents":
       return (
         <>
           <SectionHeader title="Agents" />
           <div className="px-3 space-y-2">
-            {AGENTS.map((agent) => (
-              <AgentCard key={agent.name} {...agent} />
+            {agents.map((agent) => (
+              <AgentCard
+                key={agent.name}
+                name={agent.name}
+                role={agent.role}
+                status={agent.status}
+                currentAction={agent.currentAction}
+                currentTask={agent.currentTask}
+                model={agent.model}
+              />
             ))}
           </div>
         </>
@@ -172,11 +54,11 @@ function SidebarContent({ view }: { view: ActivityView }) {
       return (
         <>
           <SectionHeader title="Backlog" />
-          <TaskList tasks={BACKLOG_TASKS} />
+          <TaskList tasks={tasks.backlog} />
           <SectionHeader title="Current" />
-          <TaskList tasks={CURRENT_TASKS} />
+          <TaskList tasks={tasks.current} />
           <SectionHeader title="Done" />
-          <TaskList tasks={DONE_TASKS} />
+          <TaskList tasks={tasks.done} />
         </>
       );
     case "logs":
@@ -193,8 +75,14 @@ function SidebarContent({ view }: { view: ActivityView }) {
         <>
           <SectionHeader title="Settings" />
           <div className="text-text-muted text-sm px-4 space-y-2 leading-relaxed">
-            <div>Модели агентов: <span className="text-text-code">config.yml</span></div>
-            <div>WebSocket: <span className="text-text-code">localhost:8765</span></div>
+            <div>
+              Модели агентов:{" "}
+              <span className="text-text-code">config.yml</span>
+            </div>
+            <div>
+              WebSocket:{" "}
+              <span className="text-text-code">localhost:8765</span>
+            </div>
             <div className="text-text-dim">Редактирование — скоро</div>
           </div>
         </>
@@ -204,14 +92,39 @@ function SidebarContent({ view }: { view: ActivityView }) {
 
 function App() {
   const [activeView, setActiveView] = useState<ActivityView>("agents");
+  const { status, sendMessage } = useOrchestrator();
+  const agents = useAgents();
+  const logs = useLogs();
+
+  const terminals: TerminalData[] = agents.map((a) => ({
+    agent: a.name,
+    status: a.status,
+    lines: a.terminalOutput,
+  }));
+
+  const logEntries = logs.map((l) => ({
+    id: l.id,
+    timestamp: l.timestamp,
+    agent: l.agent,
+    action: l.action,
+  }));
+
+  function handleChatSubmit(text: string) {
+    sendMessage({
+      type: "message",
+      from: "ui",
+      to: "opus",
+      content: text,
+    });
+  }
 
   return (
     <div className="h-screen flex flex-col bg-bg-primary text-text-primary overflow-hidden">
-      <Header agentCount={AGENTS.length} systemActive={true} />
+      <Header agentCount={agents.length} connectionStatus={status} />
       <div className="flex-1 flex overflow-hidden">
         <ActivityBar activeView={activeView} onSelect={setActiveView} />
         <aside className="w-64 h-full bg-bg-sidebar border-r border-border overflow-y-auto shrink-0">
-          <SidebarContent view={activeView} />
+          <SidebarContent view={activeView} agents={agents} />
         </aside>
         <main className="flex-1 flex flex-col overflow-hidden min-w-0">
           <div className="flex-1 overflow-hidden flex flex-col">
@@ -219,7 +132,7 @@ function App() {
               Terminals
             </h2>
             <div className="flex-1 overflow-hidden">
-              <TerminalGrid terminals={TERMINALS} />
+              <TerminalGrid terminals={terminals} />
             </div>
           </div>
           <div className="h-56 border-t border-border flex bg-bg-secondary shrink-0">
@@ -227,7 +140,7 @@ function App() {
               <ChatInput onSubmit={handleChatSubmit} />
             </div>
             <div className="flex-1 min-w-0">
-              <LogFeed entries={LOGS} />
+              <LogFeed entries={logEntries} />
             </div>
           </div>
         </main>
