@@ -4,6 +4,114 @@
 
 ## Sessions
 
+### 2026-04-19 — P3.2 HTML component parser (task #33)
+
+Extended `core/handoff.py` to extract component identifiers from HTML files in
+the handoff payload.
+
+**Files:**
+- `requirements.txt` (new) — `beautifulsoup4>=4.12`. Repo had no Python deps file
+  before (no pyproject.toml either), so created one.
+- `core/handoff.py`:
+  - Added module constants: `_COMPONENT_CLASS_MARKERS` (9 markers), `_PASCAL_RE`.
+  - Added `_extract_components(html_files: list[Path]) -> list[str]`. Imports
+    `bs4` lazily with ImportError → warning + return []. Per-file try/except
+    around `read_text` + `BeautifulSoup(text, "html.parser")`, `log.warning`
+    with `exc_info=True` on failure. Collects tag names matching PascalCase or
+    containing '-', plus class names whose lowercase contains any marker.
+    Returns `sorted(list)` from a dedup set.
+  - In `scan_and_record_handoff`: after `_collect_files`, filter HTML subset
+    and call `_extract_components`. Appended components string to the
+    fingerprint so changed components trigger re-emit and identical scans
+    still dedupe. After writing `inventory + fingerprint_comment`, if
+    components non-empty, append `## Обнаруженные компоненты` section with
+    `- \`{name}\`` bullets.
+
+**Решения:**
+- Lazy bs4 import inside `_extract_components` keeps tests runnable on
+  machines without bs4 — in practice install via requirements.txt is expected.
+- `html.parser` lowercases tags (unlike lxml), so PascalCase tag detection
+  rarely fires on real HTML; hyphenated custom elements and class-marker
+  matching remain effective. ТЗ явно требует `html.parser, no lxml dep`.
+- Components in fingerprint: `fingerprint_parts` list, joined with `\n`.
+  Only added if non-empty, to keep fingerprints stable for HTML-less handoffs.
+- `## Обнаруженные компоненты` kept as `##` per literal ТЗ string (not `###`),
+  appended AFTER `fingerprint_comment` so the comment stays attached to the
+  inventory block.
+- `classes = tag.get("class") or []`; bs4 returns list for multi-valued attr,
+  but defensive `isinstance(classes, str): classes.split()` branch handles
+  rare cases (e.g. custom soup states).
+
+**Тесты:** `python3 -m pytest tests/integration/test_spawn_flow.py -xvs` — 4/4 PASS.
+
+**Smoke:**
+- Real `ork-handoff/*.html` files are React shells with empty static classes
+  → extractor correctly returns 0 components. No spurious section appended.
+- Synthetic HTML with `<sidebar-item>`, `class="sidebar-nav info-card
+  header-top drawer-open modal-backdrop"` → produces sorted list of 6 names.
+
+### 2026-04-19 — P6.2 cosmetic polishes (task #34, commit e8ca798)
+
+Three-item polish. Outcome:
+- **Item 1 (mcp_server.py `_ensure_connected`)**: verified as already single-check under `_connect_lock`, not double-check. No change.
+- **Item 2 (useWebSocket.ts line 171 dep array)**: skipped — ui/ has no `eslint.config.js`, so `npx eslint` errors before scanning. No warning to address; rationale for hand-picked deps already in inline comment above lines 153-155.
+- **Item 3 (server.py snapshot branch, line 338)**: changed `_log_message(sender, None, "snapshot", msg)` → `_log_message(sender, agent_for_ui, "snapshot", msg)` so `messages.duckdb.msg_to` captures UI-facing agent name for analytics. `agent_for_ui` already computed at 333-337.
+
+**Тесты:** `pytest tests/integration/test_spawn_flow.py -xvs` — 4/4 PASS.
+**Коммит:** `e8ca798` в master, pushed.
+
+### 2026-04-19 — P4.1 shared memory compression loop (task #31, commit f072696)
+
+Extended per-agent `MemoryManager.compress` to also handle `memory/shared.md`,
+driven by a periodic background task in `core/main.py`.
+
+**`memory/manager.py`:**
+- Added `import logging` + module `log`.
+- Extracted shared body into private `_compress_path(path, log_agent_name, archive_prefix, default_title)`.
+- `compress(agent_name)` now delegates to `_compress_path` with agent-specific params.
+- New `compress_shared()` does the same for `shared_memory_path()`, archive prefix `"shared"`,
+  logs with `agent_name="shared"`, default title `"# Shared Team Memory"`. Wrapped in
+  try/except with `log.exception("compress_shared failed")` → `return False` so a crash can't
+  bubble up into the scheduler.
+- Threshold unchanged (`COMPRESSION_THRESHOLD_BYTES = 10 * 1024`). No compression happens
+  on boot — only on loop tick. Pre-compression copy goes to `memory/archive/{prefix}-{ts}.md`.
+
+**`core/main.py`:**
+- Added `memory_compress_loop()` — `await asyncio.sleep(600.0)` then iterates
+  `orchestrator.known_roles()` calling `memory_manager.compress(name)`, then
+  `memory_manager.compress_shared()`. Each call wrapped in its own `try/except` with
+  `log.exception`; outermost also wrapped so a single iteration crash never kills the loop.
+- Created task after existing `inbox_task`/`tasks_task`/`handoff_task`; added `memory_task`
+  to both teardown tuples (cancel + await).
+
+**Тесты:** `python3 -m pytest tests/integration/test_spawn_flow.py -xvs` — 4/4 passed.
+
+**Нюанс с race condition:** P2.2 (decisions.md) и P3.1 (handoff rescan) параллельно редактировали
+те же файлы (`memory/manager.py`, `core/main.py`). Мои Edit'ы затирались их работой несколько раз.
+Решение: дождался, пока P2.2 и P3.1 закоммитились, потом применил свои изменения на чистом HEAD
+и сразу закоммитил. На будущее — при параллельной работе в том же worktree лучше договариваться
+о порядке, либо использовать отдельный worktree.
+
+### 2026-04-19 — P3.1 runtime handoff rescan (task #30)
+
+Periodic rescan + on-demand `/rescan-handoff` + WS `handoff` frame to UI.
+
+**Файлы:**
+- `core/handoff.py` — `scan_and_record_handoff` теперь возвращает `list[str]` (relative paths) вместо bool. Модульный кэш `_last_fingerprints: dict[Path, str]` дедупит повторные вызовы (быстрый skip без чтения markdown). При смене fingerprint: апендим инвентарь как раньше + сохраняем new fingerprint + возвращаем список путей. Cross-process дедупа против существующего файла остаётся (на случай рестарта процесса).
+- `communication/client.py` — новый метод `handoff_event(files: list[str])`, шлёт `{type:handoff, files:[...]}`.
+- `communication/server.py` — в `_dispatch` ветка `mtype == "handoff"`: валидирует список, отфильтровывает не-строки, форвардит на UI через `_forward_to_ui`, дублирует в duckdb-лог.
+- `core/main.py` — slash-команда `/rescan-handoff` (зовёт scan, всегда шлёт handoff_event даже с пустым списком). Корутина `handoff_poll_loop` спит 30 сек и зовёт scan; emit handoff_event только если non-empty. `handoff_task = asyncio.create_task(...)`, добавлено в обе teardown-tuple.
+
+**Решения:**
+- `list[str]` вместо bool/dict — простой контракт для loop: empty → skip emit, non-empty → emit.
+- Module-level dict вместо instance state — `scan_and_record_handoff` это free function. Per-project_root key позволяет тестам с разными roots не конфликтовать.
+- Cross-process dedupe сохранён через grep по существующему markdown — выживает рестарт оркестратора.
+- `/rescan-handoff` шлёт event даже на empty diff — UI хочет видеть что команда сработала. Loop же фильтрует, чтобы не шуметь каждые 30 сек.
+
+**Тест:** `pytest tests/integration/test_spawn_flow.py -xvs` — 4/4 PASS.
+**Коммит:** `3e709f2 feat: P3.1 runtime handoff rescan...` в master, без push.
+**Контекст:** работал параллельно с P2.2/P4.1/P6 в одном master без worktree. Лид несколько раз ресетил working tree во время моей работы; правки переносил заново. Финальный коммит — только мои 4 файла, остальные правки не тронуты.
+
 ### 2026-04-19 — P2.2 decisions.md auto-append (task #29)
 
 Programmatic path to write `architecture/decisions.md` — WS frame `type=decision` + `/decide` slash command; Opus writes the file via `MemoryManager`.
