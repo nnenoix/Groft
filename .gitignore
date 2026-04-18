@@ -2,8 +2,10 @@ __pycache__/
 *.pyc
 *.pyo
 .claudeorch/
+.claude/scheduled_tasks.lock
 .venv/
 *.db
 *.duckdb
 node_modules/
 .env
+ork-handoff/

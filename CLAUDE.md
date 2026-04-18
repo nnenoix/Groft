@@ -151,9 +151,6 @@ MCP-мост `claudeorch-comms` (`communication/mcp_server.py`) экспозит
 ## UI-поверхность
 Папка `ui/` — Tauri + React приложение, основной интерфейс оркестратора. Запускается отдельно (`cd ui && npm run tauri dev`) или через корневой `start.sh` (`stop.sh` — для остановки). Коммуникация: WS `localhost:8765` + REST `localhost:8766`. Использует фреймы `roster`/`tasks`/`status`/`snapshot`/`message` из WS.
 
-## Артефакты старых задач
-`server.js` в корне — остаток HEALTH-1 (Express `/health`-эндпоинт). В текущем стеке не используется; удалить или перенести в отдельную историческую папку — отдельная задача.
-
 ## Интеграция с Claude Design
 
 ClaudeOrch детектирует handoff из Claude Design (папка `ork-handoff/`).
