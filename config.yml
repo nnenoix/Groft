@@ -1,0 +1,14 @@
+# ClaudeOrch — конфигурация моделей
+# Меняй модели здесь, не в файлах агентов
+
+models:
+  lead: claude-opus-4-7          # тимлид — самая умная модель
+  backend: claude-sonnet-4-6     # backend разработчик
+  frontend: claude-sonnet-4-6    # frontend разработчик
+  tester: claude-haiku-4-5-20251001  # тестировщик — можно дешевле
+  reviewer: claude-sonnet-4-6    # ревьюер
+
+# Доступные модели:
+# claude-opus-4-7 — самый умный, медленнее
+# claude-sonnet-4-6 — баланс качества и скорости
+# claude-haiku-4-5-20251001 — быстрый и дешёвый

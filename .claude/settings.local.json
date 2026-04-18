@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p ~/.claude/channels/telegram)",
+      "Read(//home/yegor/.claude/channels/**)"
+    ]
+  }
+}
