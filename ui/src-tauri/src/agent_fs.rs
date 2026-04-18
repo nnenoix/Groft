@@ -1,13 +1,58 @@
+use std::env;
 use std::fs;
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+fn agents_dir() -> Result<PathBuf, String> {
+    let cwd = env::current_dir().map_err(|e| e.to_string())?;
+    let mut p = cwd;
+    p.push(".claude");
+    p.push("agents");
+    Ok(p)
+}
+
+fn is_valid_agent_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let len = bytes.len();
+    if len < 2 || len > 31 {
+        return false;
+    }
+    if !(bytes[0] >= b'a' && bytes[0] <= b'z') {
+        return false;
+    }
+    for &b in &bytes[1..] {
+        let ok = (b >= b'a' && b <= b'z') || (b >= b'0' && b <= b'9') || b == b'-';
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
 
 #[tauri::command]
-pub fn write_agent_file(path: String, content: String) -> Result<(), String> {
-    let p = Path::new(&path);
-    if let Some(parent) = p.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+pub async fn write_agent_file(
+    name: String,
+    content: String,
+    _app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    if !is_valid_agent_name(&name) {
+        return Err("invalid name: must match ^[a-z][a-z0-9-]{1,30}$".into());
     }
-    fs::write(p, content).map_err(|e| e.to_string())
+    let mut target = agents_dir()?;
+    fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    target.push(format!("{}.md", name));
+    if target.exists() {
+        return Err("agent file already exists".into());
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(|e| e.to_string())?;
+    file.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]

@@ -16,6 +16,7 @@ import yaml
 
 from communication.client import CommunicationClient
 from communication.server import CommunicationServer
+from core import agents_watcher
 from core.error.error_handler import ErrorHandler
 from core.guard.process_guard import ProcessGuard
 from core.handoff import scan_and_record_handoff
@@ -232,6 +233,13 @@ async def main() -> None:
 
     await agent_watchdog.start()
 
+    async def _on_agents_dir_change() -> None:
+        await comm_server.broadcast_roster()
+
+    agents_watcher_task = await agents_watcher.start(
+        PROJECT_ROOT, _on_agents_dir_change
+    )
+
     async def _dispatch_inbox_command(content: str) -> None:
         # slash-command surface for the UI → opus channel. Anything else is
         # logged and ignored so stray chatter doesn't crash the loop.
@@ -412,18 +420,19 @@ async def main() -> None:
     tasks_task = asyncio.create_task(poll_tasks_loop())
     handoff_task = asyncio.create_task(handoff_poll_loop())
     memory_task = asyncio.create_task(memory_compress_loop())
+    watcher_task = agents_watcher_task
 
     await process_guard.wait_for_stop()
 
     log.info("ClaudeOrch stopped")
 
     # per-step try/except so one teardown failure doesn't leak other resources
-    for bg_task in (inbox_task, tasks_task, handoff_task, memory_task):
+    for bg_task in (inbox_task, tasks_task, handoff_task, memory_task, watcher_task):
         try:
             bg_task.cancel()
         except Exception:
             log.exception("teardown step failed: bg_task.cancel")
-    for bg_task in (inbox_task, tasks_task, handoff_task, memory_task):
+    for bg_task in (inbox_task, tasks_task, handoff_task, memory_task, watcher_task):
         try:
             await bg_task
         except asyncio.CancelledError:
