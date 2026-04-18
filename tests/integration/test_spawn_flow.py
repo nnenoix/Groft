@@ -216,6 +216,75 @@ async def test_despawn_removes_watchdog_state_and_emits_idle(stub_tmux, server):
 
 
 @pytest.mark.asyncio
+async def test_worker_disconnect_drops_agent_from_roster(stub_tmux, server):
+    """Full lifecycle: spawn → worker WS connect → despawn → disconnect → UI
+    sees roster without the worker. Covers P1.1 — UI dropping despawned
+    agents from the agents list, plus idle status frame before the drop.
+    """
+    srv, ws_port, _rest_port = server
+    ws_url = f"ws://127.0.0.1:{ws_port}"
+
+    ui_ws = await websockets.connect(ws_url)
+    try:
+        await ui_ws.send(json.dumps({"type": "register", "agent": "ui"}))
+
+        opus_client = CommunicationClient(agent_name="opus", ws_url=ws_url)
+        await opus_client.connect()
+        try:
+            spawner = AgentSpawner(
+                str(PROJECT_ROOT), str(PROJECT_ROOT / "config.yml")
+            )
+            orchestrator = Orchestrator(spawner)
+            watchdog = AgentWatchdog(comm_client=opus_client)
+            spawner.set_register_callback(
+                lambda name, target: watchdog.register_agent(name, target)
+            )
+            spawner.set_unregister_callback(
+                lambda name: watchdog.unregister_agent(name)
+            )
+
+            assert await orchestrator.spawn_role("backend-dev") is True
+
+            worker_ws = await websockets.connect(ws_url)
+            await worker_ws.send(
+                json.dumps({"type": "register", "agent": "backend-dev"})
+            )
+
+            await _recv_until(
+                ui_ws,
+                lambda f: f.get("type") == "roster"
+                and "backend-dev" in (f.get("agents") or []),
+            )
+
+            assert await orchestrator.despawn_role("backend-dev") is True
+            await opus_client.status_for("backend-dev", "idle")
+
+            await _recv_until(
+                ui_ws,
+                lambda f: f.get("type") == "status"
+                and f.get("agent") == "backend-dev"
+                and f.get("status") == "idle",
+            )
+
+            await worker_ws.close()
+
+            final_roster = await _recv_until(
+                ui_ws,
+                lambda f: f.get("type") == "roster"
+                and "backend-dev" not in (f.get("agents") or []),
+                timeout=5.0,
+            )
+            assert "backend-dev" not in final_roster["agents"], (
+                "UI still sees backend-dev in roster after worker disconnect; "
+                f"roster={final_roster!r}"
+            )
+        finally:
+            await opus_client.disconnect()
+    finally:
+        await ui_ws.close()
+
+
+@pytest.mark.asyncio
 async def test_spawn_unknown_role_is_rejected(stub_tmux, server):
     srv, ws_port, _rest_port = server
     ws_url = f"ws://127.0.0.1:{ws_port}"
