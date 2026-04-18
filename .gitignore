@@ -5,6 +5,7 @@ __pycache__/
 .claude/scheduled_tasks.lock
 ui/.claude/
 .venv/
+.pytest_cache/
 *.db
 *.duckdb
 node_modules/
