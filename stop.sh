@@ -2,21 +2,18 @@
 
 echo "🛑 Остановка ClaudeOrch..."
 
-# Остановить UI
+# Остановить UI (npm + дочерние vite/cargo/tauri)
 if [ -f .claudeorch/ui.pid ]; then
     UI_PID=$(cat .claudeorch/ui.pid)
-    kill $UI_PID 2>/dev/null && echo "✓ UI остановлен"
+    kill $UI_PID 2>/dev/null
+    pkill -f "/mnt/d/orchkerstr/ui/node_modules" 2>/dev/null
+    pkill -f "cargo run --no-default-features.*orchkerstr" 2>/dev/null
+    pkill -f "target/debug/ui" 2>/dev/null
+    echo "✓ UI остановлен"
     rm .claudeorch/ui.pid
 fi
 
-# Остановить WebSocket сервер
-if [ -f .claudeorch/ws.pid ]; then
-    WS_PID=$(cat .claudeorch/ws.pid)
-    kill $WS_PID 2>/dev/null && echo "✓ WebSocket сервер остановлен"
-    rm .claudeorch/ws.pid
-fi
-
-# Остановить оркестратор
+# Остановить оркестратор (вместе с встроенным WebSocket сервером)
 if [ -f .claudeorch/orch.pid ]; then
     ORCH_PID=$(cat .claudeorch/orch.pid)
     kill $ORCH_PID 2>/dev/null && echo "✓ Оркестратор остановлен"

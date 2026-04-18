@@ -6,30 +6,14 @@ echo "🚀 Запуск ClaudeOrch..."
 # 1. Создать .claudeorch если нет
 mkdir -p .claudeorch
 
-# 2. Запустить Python оркестратор в фоне
+# 2. Запустить Python оркестратор (хостит WebSocket сервер на :8765)
 echo "▶ Запуск оркестратора..."
 python3 core/main.py &
 ORCH_PID=$!
 echo $ORCH_PID > .claudeorch/orch.pid
-sleep 2
+sleep 3
 
-# 3. Запустить WebSocket сервер в фоне
-echo "▶ Запуск WebSocket сервера..."
-python3 -c "
-import asyncio
-from communication.server import CommunicationServer
-async def main():
-    s = CommunicationServer()
-    await s.start()
-    print('WebSocket server running on :8765')
-    await asyncio.Future()
-asyncio.run(main())
-" &
-WS_PID=$!
-echo $WS_PID > .claudeorch/ws.pid
-sleep 2
-
-# 4. Проверить что сервисы запустились
+# 3. Проверить что оркестратор жив
 if kill -0 $ORCH_PID 2>/dev/null; then
     echo "✓ Оркестратор запущен (PID: $ORCH_PID)"
 else
@@ -37,14 +21,7 @@ else
     exit 1
 fi
 
-if kill -0 $WS_PID 2>/dev/null; then
-    echo "✓ WebSocket сервер запущен (PID: $WS_PID)"
-else
-    echo "✗ WebSocket сервер не запустился"
-    exit 1
-fi
-
-# 5. Запустить Claude Code с Channels в tmux
+# 4. Запустить Claude Code с Channels в tmux
 echo "▶ Запуск Claude Code..."
 tmux new-session -d -s claudeorch \
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude \
@@ -53,11 +30,10 @@ tmux new-session -d -s claudeorch \
     --channels plugin:telegram@claude-plugins-official"
 echo "✓ Claude Code запущен в tmux сессии 'claudeorch'"
 
-# 6. Запустить UI
+# 5. Запустить UI
 echo "▶ Запуск UI..."
-cd ui && npm run tauri dev &
+( cd ui && npm run tauri dev ) &
 UI_PID=$!
-cd ..
 echo $UI_PID > .claudeorch/ui.pid
 
 echo ""

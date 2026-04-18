@@ -55,13 +55,9 @@ async def main() -> None:
 
     await agent_watchdog.start()
 
-    try:
-        # smoke test: bound the wait so the process exits without Ctrl-C
-        await asyncio.wait_for(process_guard.wait_for_stop(), timeout=2.0)
-    except asyncio.TimeoutError:
-        pass
+    await process_guard.wait_for_stop()
 
-    print("Smoke test завершён.")
+    print("ClaudeOrch остановлен.")
 
     # per-step try/except so one teardown failure doesn't leak other resources
     try:
