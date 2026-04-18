@@ -335,7 +335,7 @@ class CommunicationServer:
                 if isinstance(payload_agent, str) and payload_agent
                 else sender
             )
-            await self._log_message(sender, None, "snapshot", msg)
+            await self._log_message(sender, agent_for_ui, "snapshot", msg)
             terminal = msg.get("terminal", msg.get("content", ""))
             await self._forward_to_ui(
                 {"type": "snapshot", "agent": agent_for_ui, "terminal": terminal}
