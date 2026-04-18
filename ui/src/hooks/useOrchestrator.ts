@@ -125,7 +125,10 @@ const REST_URL =
 
 // roster filter — "ui" is the viewer itself; opus is kept so the orchestrator
 // still appears in the agents view.
-const ROSTER_HIDDEN = new Set(["ui"]);
+const ROSTER_HIDDEN: Set<string> =
+  import.meta.env.VITE_SHOW_INTERNAL_AGENTS === "1"
+    ? new Set<string>()
+    : new Set<string>(["ui"]);
 function cleanRoster(names: string[]): string[] {
   return names.filter((n) => !ROSTER_HIDDEN.has(n));
 }
