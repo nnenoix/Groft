@@ -94,8 +94,15 @@ async def main() -> None:
         agent_tmux_targets=agent_tmux_targets,
     )
 
-    # register whatever agents spawner has already brought up (empty at boot;
-    # spawner becomes the source of truth as Opus spawns executors at runtime)
+    # keep watchdog registry in lock-step with spawner lifecycle — each spawn
+    # auto-registers, each despawn auto-unregisters, so no gap at runtime
+    spawner.set_register_callback(
+        lambda name, target: agent_watchdog.register_agent(name, target)
+    )
+    spawner.set_unregister_callback(
+        lambda name: agent_watchdog.unregister_agent(name)
+    )
+    # any agents spawner already tracks (empty at boot, non-empty after restore)
     for name, target in spawner.get_tmux_targets().items():
         agent_watchdog.register_agent(name, target)
 

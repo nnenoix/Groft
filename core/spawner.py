@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -13,6 +14,14 @@ class AgentSpawner:
         with open(config_path) as f:
             self.config: dict[str, Any] = yaml.safe_load(f) or {}
         self.active_agents: dict[str, dict[str, Any]] = {}
+        self._register_cb: Callable[[str, str], Any] | None = None
+        self._unregister_cb: Callable[[str], Any] | None = None
+
+    def set_register_callback(self, fn: Callable[[str, str], Any]) -> None:
+        self._register_cb = fn
+
+    def set_unregister_callback(self, fn: Callable[[str], Any]) -> None:
+        self._unregister_cb = fn
 
     async def spawn(self, agent_name: str) -> bool:
         models = self.config.get("models", {}) if isinstance(self.config, dict) else {}
@@ -41,11 +50,19 @@ class AgentSpawner:
             "model": model,
             "status": "starting",
         }
+        if self._register_cb is not None:
+            result = self._register_cb(agent_name, window)
+            if asyncio.iscoroutine(result):
+                await result
         return True
 
     async def despawn(self, agent_name: str) -> bool:
         if agent_name not in self.active_agents:
             return False
+        if self._unregister_cb is not None:
+            result = self._unregister_cb(agent_name)
+            if asyncio.iscoroutine(result):
+                await result
         subprocess.run([
             "tmux", "kill-window",
             "-t", f"claudeorch:{agent_name}",
