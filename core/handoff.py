@@ -28,9 +28,15 @@ def _collect_files(root: Path) -> list[Path]:
     return files
 
 
+def _rel_path(project_root: Path, path: Path) -> str:
+    if path.is_relative_to(project_root):
+        return path.relative_to(project_root).as_posix()
+    return str(path).replace("\\", "/")
+
+
 def _format_inventory(project_root: Path, handoff_root: Path, files: list[Path]) -> str:
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    rel_root = handoff_root.relative_to(project_root) if handoff_root.is_relative_to(project_root) else handoff_root
+    rel_root = _rel_path(project_root, handoff_root)
     lines: list[str] = []
     lines.append(f"## {ts} — handoff detected at `{rel_root}`")
     lines.append("")
@@ -41,7 +47,7 @@ def _format_inventory(project_root: Path, handoff_root: Path, files: list[Path])
         lines.append("  - _пусто_")
     else:
         for f in files:
-            rel = f.relative_to(project_root) if f.is_relative_to(project_root) else f
+            rel = _rel_path(project_root, f)
             try:
                 size = f.stat().st_size
             except OSError:
@@ -50,10 +56,6 @@ def _format_inventory(project_root: Path, handoff_root: Path, files: list[Path])
     lines.append("- **Статус:** обнаружен, не проанализирован — Opus должен прочитать файлы и заполнить план.")
     lines.append("")
     return "\n".join(lines)
-
-
-def _rel_path(project_root: Path, path: Path) -> str:
-    return str(path.relative_to(project_root)) if path.is_relative_to(project_root) else str(path)
 
 
 async def scan_and_record_handoff(project_root: Path) -> list[str]:
