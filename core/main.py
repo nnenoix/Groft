@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import asyncio
+import json
 import logging
 from typing import Any
 from uuid import uuid4
@@ -261,6 +262,34 @@ async def main() -> None:
                 # the despawned agent's ws connection drops.
             except Exception:
                 log.exception("opus-inbox /despawn failed role=%s", arg)
+        elif cmd == "/decide":
+            raw_json = stripped[len(cmd):].strip()
+            if not raw_json:
+                log.info("opus-inbox /decide missing payload")
+                return
+            try:
+                payload = json.loads(raw_json)
+            except Exception:
+                log.exception("opus-inbox /decide bad JSON")
+                return
+            required = ("title", "context", "decision", "rationale")
+            if not isinstance(payload, dict) or not all(
+                isinstance(payload.get(k), str) for k in required
+            ):
+                log.info("opus-inbox /decide missing required fields")
+                return
+            try:
+                await memory_manager.append_decision(
+                    title=payload["title"],
+                    context=payload["context"],
+                    decision=payload["decision"],
+                    rationale=payload["rationale"],
+                )
+                log.info(
+                    "opus-inbox /decide appended title=%r", payload["title"]
+                )
+            except Exception:
+                log.exception("opus-inbox /decide append failed")
         elif cmd == "/restart":
             if arg is None:
                 log.info("opus-inbox /restart missing role")

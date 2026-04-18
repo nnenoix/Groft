@@ -4,6 +4,25 @@
 
 ## Sessions
 
+### 2026-04-19 — P2.2 decisions.md auto-append (task #29)
+
+Programmatic path to write `architecture/decisions.md` — WS frame `type=decision` + `/decide` slash command; Opus writes the file via `MemoryManager`.
+
+**Файлы:**
+- `memory/manager.py` — новый метод `append_decision(title, context, decision, rationale)`. Формат: heading `## <ISO UTC timespec=seconds> — <title>`, потом три H3 подсекции `Context` / `Decision` / `Rationale` как параграфы. `path.open("a")` создаёт файл если отсутствует, директория создаётся через `mkdir(parents=True, exist_ok=True)`. Файловая запись в `run_in_executor` — event loop не блокируется на диске. DuckDB лог операции `append_decision`.
+- `core/main.py` — импорт `json`; в `_dispatch_inbox_command` ветка `/decide`. Берём остаток строки через `stripped[len(cmd):].strip()` (не `parts[1:]`, чтобы не коллапсить пробелы внутри JSON), `json.loads`, валидируем что все 4 поля — str, вызываем `memory_manager.append_decision(**payload)`. `memory_manager` уже в closure-scope main(). Ошибки JSON/валидации/записи логгируются через `log.info`/`log.exception` и возвращают без креша.
+- `communication/server.py` — в `_dispatch` ветка `mtype == "decision"`. Валидирует 4 required строковых поля, синтезирует `{"type":"message","from":<sender>,"to":"opus","content":"/decide <json>"}` и отправляет через `_route_direct(SNAPSHOT_SINK_AGENT, ...)`. Сервер сам в файл НЕ пишет — только forward к Opus. Пишем duckdb-лог `decision` для аналитики.
+
+**Ключевые решения:**
+- Один write-site в системе — `MemoryManager.append_decision`. Сервер не дублирует фильсистемную логику, чтобы отделить транспорт от persistence.
+- Форвард через `_route_direct`, а не через `_dispatch(message)`, — не нужен tmux-forward для этого кейса (у opus есть WS consumer). Чище + избегаем побочных эффектов.
+- Парсинг `/decide` через slice вместо `parts[1:]` — в payload могут быть строки с двойными пробелами, `split()` их бы склеил.
+- ISO-timestamp через `isoformat(timespec="seconds")` по ТЗ — выход `2026-04-19T12:34:56+00:00`, стабильный для сортировки.
+
+**Тесты:** `python3 -m pytest tests/integration/test_spawn_flow.py -xvs` — 4/4 PASS (unchanged).
+
+**Коммит:** сделан в master (один коммит feat:, без push).
+
 ### 2026-04-18 — HEALTH-1 (feature/health)
 
 Создан минимальный Express API в worktree `/mnt/d/orchkerstr-feature-health/`.

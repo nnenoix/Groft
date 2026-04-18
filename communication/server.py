@@ -373,6 +373,19 @@ class CommunicationServer:
                     if key in msg:
                         forwarded[key] = msg[key]
                 await self._forward_to_ui(forwarded)
+        elif mtype == "decision":
+            required = ("title", "context", "decision", "rationale")
+            if not all(isinstance(msg.get(k), str) for k in required):
+                return
+            payload = {k: msg[k] for k in required}
+            synthesized = {
+                "type": "message",
+                "from": sender,
+                "to": SNAPSHOT_SINK_AGENT,
+                "content": "/decide " + json.dumps(payload),
+            }
+            await self._route_direct(SNAPSHOT_SINK_AGENT, synthesized)
+            await self._log_message(sender, SNAPSHOT_SINK_AGENT, "decision", msg)
         elif mtype == "tasks":
             validated: dict[str, Any] = {"type": "tasks"}
             for bucket in ("backlog", "current", "done"):

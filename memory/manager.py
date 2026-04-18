@@ -148,6 +148,40 @@ class MemoryManager:
             details={},
         )
 
+    async def append_decision(
+        self,
+        title: str,
+        context: str,
+        decision: str,
+        rationale: str,
+    ) -> None:
+        assert self._project_path is not None
+        path = self._project_path / "architecture" / "decisions.md"
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        bytes_before = await self._file_size(path)
+        body = (
+            f"\n## {timestamp} — {title}\n\n"
+            f"### Context\n\n{context}\n\n"
+            f"### Decision\n\n{decision}\n\n"
+            f"### Rationale\n\n{rationale}\n"
+        )
+        loop = asyncio.get_running_loop()
+
+        def _write() -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(body)
+
+        await loop.run_in_executor(None, _write)
+        bytes_after = await self._file_size(path)
+        await self._log(
+            operation="append_decision",
+            agent_name=None,
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+            details={"title": title},
+        )
+
     async def compress(self, agent_name: str) -> bool:
         path = self.agent_memory_path(agent_name)
         bytes_before = await self._file_size(path)
