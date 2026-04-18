@@ -386,6 +386,14 @@ class CommunicationServer:
             }
             await self._route_direct(SNAPSHOT_SINK_AGENT, synthesized)
             await self._log_message(sender, SNAPSHOT_SINK_AGENT, "decision", msg)
+        elif mtype == "handoff":
+            files = msg.get("files")
+            if not isinstance(files, list):
+                return
+            cleaned = [f for f in files if isinstance(f, str)]
+            payload = {"type": "handoff", "files": cleaned}
+            await self._forward_to_ui(payload)
+            await self._log_message(sender, UI_SINK_AGENT, "handoff", payload)
         elif mtype == "tasks":
             validated: dict[str, Any] = {"type": "tasks"}
             for bucket in ("backlog", "current", "done"):

@@ -299,6 +299,12 @@ async def main() -> None:
                 await comm_client.status_for(arg, "restarting")
             except Exception:
                 log.exception("opus-inbox /restart failed role=%s", arg)
+        elif cmd == "/rescan-handoff":
+            try:
+                new_files = await scan_and_record_handoff(PROJECT_ROOT)
+                await comm_client.handoff_event(new_files or [])
+            except Exception:
+                log.exception("opus-inbox /rescan-handoff failed")
         elif cmd == "/runtest":
             try:
                 test_path = PROJECT_ROOT / "architecture" / "current-test.md"
@@ -372,20 +378,33 @@ async def main() -> None:
                 log.exception("tasks-poll push failed")
             await asyncio.sleep(5.0)
 
+    async def handoff_poll_loop() -> None:
+        # 30s tick — cheap module-level fingerprint dedupe in scan_and_record_handoff
+        # ensures we touch design-handoff.md only when the inventory actually shifts.
+        while True:
+            await asyncio.sleep(30.0)
+            try:
+                new_files = await scan_and_record_handoff(PROJECT_ROOT)
+                if new_files:
+                    await comm_client.handoff_event(new_files)
+            except Exception:
+                log.exception("handoff poll loop iteration failed")
+
     inbox_task = asyncio.create_task(consume_opus_inbox())
     tasks_task = asyncio.create_task(poll_tasks_loop())
+    handoff_task = asyncio.create_task(handoff_poll_loop())
 
     await process_guard.wait_for_stop()
 
     log.info("ClaudeOrch stopped")
 
     # per-step try/except so one teardown failure doesn't leak other resources
-    for bg_task in (inbox_task, tasks_task):
+    for bg_task in (inbox_task, tasks_task, handoff_task):
         try:
             bg_task.cancel()
         except Exception:
             log.exception("teardown step failed: bg_task.cancel")
-    for bg_task in (inbox_task, tasks_task):
+    for bg_task in (inbox_task, tasks_task, handoff_task):
         try:
             await bg_task
         except asyncio.CancelledError:

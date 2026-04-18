@@ -117,6 +117,11 @@ class CommunicationClient:
             payload["done"] = done
         await ws.send(json.dumps(payload))
 
+    async def handoff_event(self, files: list[str]) -> None:
+        # pushes a {type:handoff, files:[...]} frame; server forwards it to the UI sink
+        ws = self._require_ws()
+        await ws.send(json.dumps({"type": "handoff", "files": files}))
+
     async def listen(self) -> AsyncIterator[dict]:
         ws = self._require_ws()
         try:

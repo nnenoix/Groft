@@ -9,6 +9,10 @@ log = logging.getLogger(__name__)
 # kept small on purpose — we inventory files, not parse design semantics
 _MAX_FILES_LISTED = 200
 
+# fingerprint of the last successful scan, keyed by project_root. Lets the
+# periodic poll cheaply skip repeat calls without re-reading the markdown.
+_last_fingerprints: dict[Path, str] = {}
+
 
 def _collect_files(root: Path) -> list[Path]:
     files: list[Path] = []
@@ -46,30 +50,39 @@ def _format_inventory(project_root: Path, handoff_root: Path, files: list[Path])
     return "\n".join(lines)
 
 
-async def scan_and_record_handoff(project_root: Path) -> bool:
+async def scan_and_record_handoff(project_root: Path) -> list[str]:
     """Detect Claude Design handoff payload and append inventory to architecture/design-handoff.md.
 
-    Non-destructive: appends a new dated section. Returns True if anything was appended.
+    Non-destructive: appends a new dated section. Returns the list of relative
+    file paths in the current inventory when something new was recorded; an
+    empty list if the fingerprint matches the previous scan or there is
+    nothing to inventory.
     """
     handoff_root = project_root / "ork-handoff"
     if not handoff_root.exists():
-        return False
+        return []
 
     files = _collect_files(handoff_root)
     if not files:
-        return False
+        return []
 
-    inventory = _format_inventory(project_root, handoff_root, files)
+    file_fingerprint = "\n".join(str(f) for f in files)
+
+    # cheap module-level dedupe — periodic poll runs every 30s, no need to
+    # touch the markdown file when the file set hasn't shifted
+    if _last_fingerprints.get(project_root) == file_fingerprint:
+        return []
 
     target = project_root / "architecture" / "design-handoff.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     existing = target.read_text(encoding="utf-8") if target.exists() else ""
 
-    # dedupe: skip if the same file list was already inventoried in the last section
-    file_fingerprint = "\n".join(str(f) for f in files)
+    # cross-process dedupe: same fingerprint already inventoried by a prior run
     if file_fingerprint and file_fingerprint in existing:
-        return False
+        _last_fingerprints[project_root] = file_fingerprint
+        return []
 
+    inventory = _format_inventory(project_root, handoff_root, files)
     # stash the fingerprint as an HTML comment so it's hidden from humans but findable by us
     fingerprint_comment = f"<!-- handoff-fingerprint:\n{file_fingerprint}\n-->\n"
 
@@ -77,5 +90,11 @@ async def scan_and_record_handoff(project_root: Path) -> bool:
         fh.write("\n")
         fh.write(inventory)
         fh.write(fingerprint_comment)
+    _last_fingerprints[project_root] = file_fingerprint
     log.info("recorded %d files under %s", len(files), handoff_root)
-    return True
+
+    rels: list[str] = []
+    for f in files:
+        rel = f.relative_to(project_root) if f.is_relative_to(project_root) else f
+        rels.append(str(rel))
+    return rels
