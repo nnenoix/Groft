@@ -150,7 +150,7 @@ function useChannels(): UseChannelsResult {
         command: "/telegram:access policy disabled",
       });
     } catch (err) {
-      log.warn("tmux disconnect failed", err);
+      log.exception(err, "tmux disconnect failed");
     }
   }, []);
 

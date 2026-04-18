@@ -161,7 +161,7 @@ function useOrchestrator(): UseOrchestratorResult {
         if (!names) return;
         dispatch({ type: "SET_AGENT_ROSTER", names: cleanRoster(names) });
       } catch (err) {
-        log.warn("roster fetch failed", err);
+        log.exception(err, "roster fetch failed");
       }
     })();
     return () => ctrl.abort();
