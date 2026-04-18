@@ -12,3 +12,10 @@ models:
 # claude-opus-4-7 — самый умный, медленнее
 # claude-sonnet-4-6 — баланс качества и скорости
 # claude-haiku-4-5-20251001 — быстрый и дешёвый
+
+# tmux — куда слать команды для Opus-тимлида и агентов (ключ — имя агента).
+# Пока все исполнители живут в окне Opus (Agent Teams in-process), поэтому дефолт один target.
+tmux:
+  lead_target: "claudeorch:0"
+  agent_targets:
+    opus: "claudeorch:0"

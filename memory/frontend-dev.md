@@ -261,3 +261,47 @@ API: `{ status, connected, sendMessage(obj), lastMessage }`. `status` — `'disc
 - Сервер не форвардит `status` другим клиентам (только логирует). Чтобы UPSERT_AGENT_STATUS реально срабатывал, оркестратору надо будет либо броадкастить статусы, либо расширить server.py.
 - `SNAPSHOT_SINK_AGENT = "opus"` — snapshot'ы идут только туда. Если UI должен их видеть, нужно либо менять sink, либо дублировать через broadcast.
 - `sendMessage` сейчас silently drop в offline. Если UX потребует — добавить буфер или визуальный фидбэк у ChatInput (пока достаточно индикатора в Header).
+
+---
+
+## Сессия UI-6 (2026-04-18) — P0.2 / P0.3: убраны моки, roster с сервера, offline-фидбэк в чате
+
+### agentStore.tsx
+- `INITIAL_AGENTS` удалён — стартуем с `agents: []`. До прихода roster с сервера боковая панель Agents пустая, счётчик в Header = 0. Это сознательно: лучше явный «нет данных», чем ложные idle-карточки.
+- `INITIAL_TASKS` заменён на `{backlog:[], current:[], done:[]}`.
+- Новое action `SET_AGENT_ROSTER { names: string[] }`:
+  - Строит `Map<name, AgentState>` из существующего state.
+  - Для каждого имени в `names`: если был — переиспользует весь prev-record (status, terminalOutput, currentAction/Task, model — всё сохраняется). Если нет — создаёт минимальную запись (`role=name, status='idle', model='', currentAction='', currentTask='', terminalOutput=[]`).
+  - Агенты которых нет в `names` удаляются (сервер — источник правды о roster'e).
+- Новое action `UPSERT_TASKS { backlog?, current?, done? }`:
+  - Частичное обновление — только те поля что переданы; остальные из `state.tasks`.
+- `Action` union расширен обоими новыми типами, TS exhaustive check в reducer сохранён.
+
+### useOrchestrator.ts
+- REST-fetch `http://localhost:8766/agents` при переходе `status !== 'connected' → status === 'connected'`. Использую `useRef<WSStatus>` для предыдущего значения — один fetch на транзицию, никакого polling. AbortController в return-cleanup.
+- Ответ валидируется: ожидаем `{agents: string[]}` через `asStringArray`. На ошибке fetch или невалидном JSON — silent fallback (WS `roster` фрейм может прийти позже).
+- WS-тип `roster`: `msg.agents: string[]` → `SET_AGENT_ROSTER`.
+- WS-тип `tasks`: валидирую все три массива через `asTaskArray` (проверяю `id`, `title`, `status` — статусы через `VALID_TASK_STATUSES`). Если ни одно поле не прошло валидацию — no-op, чтобы не стереть локальный state при кривом фрейме. `stage` дефолтит в `""`.
+
+### ChatInput.tsx — boolean контракт
+- `onSubmit: (text: string) => boolean`. Textarea очищается только на `true`.
+- На `false` — state `hasError`, border textarea становится `border-status-stuck` + под textarea появляется строка «Сообщение не отправлено — нет связи» (`text-status-stuck text-xs`).
+- Ошибка сбрасывается при следующем submit ИЛИ при любом change текста (чтобы пользователь не видел красный бордер пока печатает новый текст).
+- Класс бордера собирается через тернарник `hasError ? "border-status-stuck focus:border-status-stuck" : "border-border focus:border-accent-primary"` — focus-стиль тоже красный в ошибке.
+
+### App.tsx
+- `handleChatSubmit(text): boolean` теперь `return sendMessage(...)` — проксирует результат напрямую.
+
+### Нюансы реализации
+- `border-status-stuck` / `text-status-stuck` — Tailwind генерирует их автоматически из `theme.extend.colors.status.stuck = "#c0392b"` (UI-3). Safelist не нужен — классы использованы статически (ternary, не interpolation).
+- Пустой стартовый roster: ConnectionStatus в Header уже покрывает случай «пока не подключены». Когда сервер недоступен на старте, фетч `/agents` не пройдёт, roster останется пустым, Header покажет Offline + 0 agents — консистентно.
+- Не трогал `UPSERT_AGENT_STATUS` (оно уже умело создавать запись для неизвестного агента) — roster и status-upsert совместимы.
+
+### Build
+`npm run build` зелёный, 40 модулей (то же что UI-5), ~5.0s, bundle 208.12 kB (gzip 65.49 kB), css 11.71 kB (gzip 3.02 kB). Рост vs UI-5: +1.0 kB js, +0.45 kB css — новые actions + ErrorState в ChatInput + roster-fetch логика.
+
+### Изменённые файлы
+- `ui/src/store/agentStore.tsx` — SET_AGENT_ROSTER, UPSERT_TASKS, пустой initial state.
+- `ui/src/hooks/useOrchestrator.ts` — roster/tasks handlers, REST fetch при reconnect.
+- `ui/src/components/ChatInput.tsx` — boolean-return контракт, красная подсветка + error message.
+- `ui/src/App.tsx` — handleChatSubmit возвращает boolean.

@@ -109,8 +109,8 @@ function App() {
     action: l.action,
   }));
 
-  function handleChatSubmit(text: string) {
-    sendMessage({
+  function handleChatSubmit(text: string): boolean {
+    return sendMessage({
       type: "message",
       from: "ui",
       to: "opus",

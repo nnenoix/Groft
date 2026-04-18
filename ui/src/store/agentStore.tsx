@@ -51,7 +51,14 @@ export type Action =
       currentTask?: string;
     }
   | { type: "APPEND_TERMINAL"; name: string; lines: string[] }
-  | { type: "APPEND_LOG"; entry: Omit<LogEntry, "id"> };
+  | { type: "APPEND_LOG"; entry: Omit<LogEntry, "id"> }
+  | { type: "SET_AGENT_ROSTER"; names: string[] }
+  | {
+      type: "UPSERT_TASKS";
+      backlog?: Task[];
+      current?: Task[];
+      done?: Task[];
+    };
 
 /* ------------------------------------------------------------------ */
 /* Buffer limits                                                       */
@@ -61,74 +68,18 @@ const TERMINAL_BUFFER = 100;
 const LOG_BUFFER = 200;
 
 /* ------------------------------------------------------------------ */
-/* Initial mock state — agent list / tasks carry over from UI-4.       */
-/* Terminal output, action, status are overwritten by WS traffic.      */
+/* Initial state — empty. Roster comes from server (REST /agents +    */
+/* `roster` WS frames); tasks come from future `tasks` WS frames.     */
 /* ------------------------------------------------------------------ */
 
-const INITIAL_AGENTS: AgentState[] = [
-  {
-    name: "backend-dev",
-    role: "backend",
-    status: "idle",
-    currentAction: "Ожидает",
-    currentTask: "—",
-    model: "sonnet-4-6",
-    terminalOutput: [],
-  },
-  {
-    name: "frontend-dev",
-    role: "frontend",
-    status: "idle",
-    currentAction: "Ожидает",
-    currentTask: "—",
-    model: "sonnet-4-6",
-    terminalOutput: [],
-  },
-  {
-    name: "tester",
-    role: "test",
-    status: "idle",
-    currentAction: "Ожидает",
-    currentTask: "—",
-    model: "haiku-4-5",
-    terminalOutput: [],
-  },
-  {
-    name: "reviewer",
-    role: "review",
-    status: "idle",
-    currentAction: "Ожидает",
-    currentTask: "—",
-    model: "sonnet-4-6",
-    terminalOutput: [],
-  },
-];
-
 const INITIAL_TASKS: Tasks = {
-  backlog: [
-    { id: "b1", title: "AUTH-1: Авторизация", stage: "", status: "pending" },
-    { id: "b2", title: "UI-2: Dashboard", stage: "", status: "pending" },
-  ],
-  current: [
-    {
-      id: "c1",
-      title: "HEALTH-1: /health endpoint",
-      stage: "",
-      status: "active",
-    },
-  ],
-  done: [
-    {
-      id: "d1",
-      title: "INIT-1: Структура проекта",
-      stage: "",
-      status: "done",
-    },
-  ],
+  backlog: [],
+  current: [],
+  done: [],
 };
 
 const INITIAL_STATE: StoreState = {
-  agents: INITIAL_AGENTS,
+  agents: [],
   logs: [],
   tasks: INITIAL_TASKS,
 };
@@ -197,6 +148,37 @@ function reducer(state: StoreState, action: Action): StoreState {
           ? merged.slice(merged.length - LOG_BUFFER)
           : merged;
       return { ...state, logs: trimmed };
+    }
+    case "SET_AGENT_ROSTER": {
+      // Merge: keep existing agent records for names still present
+      // (preserves status / terminal / currentAction / currentTask).
+      // Create minimal records for new names. Drop records whose names
+      // are no longer in the roster.
+      const existingByName = new Map(state.agents.map((a) => [a.name, a]));
+      const nextAgents: AgentState[] = action.names.map((name) => {
+        const prev = existingByName.get(name);
+        if (prev) return prev;
+        return {
+          name,
+          role: name,
+          status: "idle",
+          currentAction: "",
+          currentTask: "",
+          model: "",
+          terminalOutput: [],
+        };
+      });
+      return { ...state, agents: nextAgents };
+    }
+    case "UPSERT_TASKS": {
+      const nextTasks: Tasks = {
+        backlog:
+          action.backlog !== undefined ? action.backlog : state.tasks.backlog,
+        current:
+          action.current !== undefined ? action.current : state.tasks.current,
+        done: action.done !== undefined ? action.done : state.tasks.done,
+      };
+      return { ...state, tasks: nextTasks };
     }
   }
 }

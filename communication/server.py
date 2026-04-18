@@ -196,13 +196,30 @@ class CommunicationServer:
                 await old.close(code=1000, reason="reconnect")
             except Exception:
                 pass
+        # push fresh roster to UI so the agent panel reflects the new connection
+        await self._broadcast_roster()
 
     def _unregister(self, name: str, ws: WebSocketServerProtocol) -> None:
+        removed = False
         with self._lock:
             current = self._registry.get(name)
             if current is ws:
                 self._registry.pop(name, None)
                 self._status.pop(name, None)
+                removed = True
+        if removed:
+            # fire-and-forget; sync method can't await, but roster push is best-effort
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            loop.create_task(self._broadcast_roster())
+
+    async def _broadcast_roster(self) -> None:
+        # silent skip if the UI never connected; _forward_to_ui handles that too
+        with self._lock:
+            agents = list(self._registry.keys())
+        await self._forward_to_ui({"type": "roster", "agents": agents})
 
     async def _dispatch(
         self, msg: dict[str, Any], ws: WebSocketServerProtocol, sender: str
