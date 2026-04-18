@@ -6,6 +6,8 @@ import TaskList from "./components/TaskList";
 import ChatInput from "./components/ChatInput";
 import LogFeed from "./components/LogFeed";
 import TerminalGrid, { type TerminalData } from "./components/TerminalGrid";
+import AgentList from "./pages/AgentList";
+import MessengerSettings from "./pages/MessengerSettings";
 import useOrchestrator from "./hooks/useOrchestrator";
 import {
   useAgents,
@@ -61,12 +63,12 @@ function SidebarContent({
           <TaskList tasks={tasks.done} />
         </>
       );
-    case "logs":
+    case "messengers":
       return (
         <>
-          <SectionHeader title="Logs" />
+          <SectionHeader title="Messengers" />
           <div className="text-text-muted text-sm px-4 leading-relaxed">
-            Последние события — в нижней панели под терминалами.
+            Telegram / Discord / Webhook — справа.
           </div>
         </>
       );
@@ -118,6 +120,8 @@ function App() {
     });
   }
 
+  const isPageView = activeView === "agents" || activeView === "messengers";
+
   return (
     <div className="h-screen flex flex-col bg-bg-primary text-text-primary overflow-hidden">
       <Header agentCount={agents.length} connectionStatus={status} />
@@ -127,22 +131,30 @@ function App() {
           <SidebarContent view={activeView} agents={agents} />
         </aside>
         <main className="flex-1 flex flex-col overflow-hidden min-w-0">
-          <div className="flex-1 overflow-hidden flex flex-col">
-            <h2 className="text-text-muted uppercase text-xs tracking-widest px-6 pt-4 pb-2">
-              Terminals
-            </h2>
+          {isPageView ? (
             <div className="flex-1 overflow-hidden">
-              <TerminalGrid terminals={terminals} />
+              {activeView === "agents" ? <AgentList /> : <MessengerSettings />}
             </div>
-          </div>
-          <div className="h-56 border-t border-border flex bg-bg-secondary shrink-0">
-            <div className="w-[40%] border-r border-border">
-              <ChatInput onSubmit={handleChatSubmit} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <LogFeed entries={logEntries} />
-            </div>
-          </div>
+          ) : (
+            <>
+              <div className="flex-1 overflow-hidden flex flex-col">
+                <h2 className="text-text-muted uppercase text-xs tracking-widest px-6 pt-4 pb-2">
+                  Terminals
+                </h2>
+                <div className="flex-1 overflow-hidden">
+                  <TerminalGrid terminals={terminals} />
+                </div>
+              </div>
+              <div className="h-56 border-t border-border flex bg-bg-secondary shrink-0">
+                <div className="w-[40%] border-r border-border">
+                  <ChatInput onSubmit={handleChatSubmit} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <LogFeed entries={logEntries} />
+                </div>
+              </div>
+            </>
+          )}
         </main>
       </div>
     </div>

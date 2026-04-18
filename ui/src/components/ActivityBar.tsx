@@ -1,4 +1,4 @@
-export type ActivityView = "agents" | "tasks" | "logs" | "settings";
+export type ActivityView = "agents" | "tasks" | "messengers" | "settings";
 
 export interface ActivityBarProps {
   activeView: ActivityView;
@@ -14,7 +14,7 @@ interface ActivityItem {
 const ITEMS: ActivityItem[] = [
   { view: "agents", icon: "👥", label: "Agents" },
   { view: "tasks", icon: "✓", label: "Tasks" },
-  { view: "logs", icon: "📋", label: "Logs" },
+  { view: "messengers", icon: "💬", label: "Messengers" },
   { view: "settings", icon: "⚙", label: "Settings" },
 ];
 
