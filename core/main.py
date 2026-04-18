@@ -257,6 +257,8 @@ async def main() -> None:
             try:
                 await orchestrator.despawn_role(arg)
                 await comm_client.status_for(arg, "idle")
+                # Roster re-broadcast happens naturally via _unregister when
+                # the despawned agent's ws connection drops.
             except Exception:
                 log.exception("opus-inbox /despawn failed role=%s", arg)
         elif cmd == "/restart":
@@ -268,6 +270,18 @@ async def main() -> None:
                 await comm_client.status_for(arg, "restarting")
             except Exception:
                 log.exception("opus-inbox /restart failed role=%s", arg)
+        elif cmd == "/runtest":
+            try:
+                test_path = PROJECT_ROOT / "architecture" / "current-test.md"
+                body = ""
+                if test_path.exists():
+                    body = test_path.read_text(encoding="utf-8")
+                if not body.strip():
+                    log.info("no current-test.md")
+                    return
+                await comm_client.send("tester", body)
+            except Exception:
+                log.exception("opus-inbox /runtest failed")
         else:
             log.info("opus-inbox unknown command: %r", stripped)
 
@@ -281,6 +295,13 @@ async def main() -> None:
                 log.info(
                     "opus-inbox type=%s from=%s content=%r", mtype, sender, content
                 )
+                if (
+                    mtype == "message"
+                    and sender == "tester"
+                    and isinstance(content, str)
+                    and content.startswith("TEST_RESULT:")
+                ):
+                    log.info("test result from tester: %s", content)
                 if mtype == "message" and isinstance(content, str):
                     try:
                         await _dispatch_inbox_command(content)

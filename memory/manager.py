@@ -68,6 +68,10 @@ class MemoryManager:
         assert self._project_path is not None
         return self._project_path / "architecture" / "current-task.md"
 
+    def current_test_path(self) -> Path:
+        assert self._project_path is not None
+        return self._project_path / "architecture" / "current-test.md"
+
     def archive_dir(self) -> Path:
         return self._archive_dir()
 
@@ -79,6 +83,7 @@ class MemoryManager:
         agent_text = await self._read_or_empty(self.agent_memory_path(agent_name))
         shared_text = await self._read_or_empty(self.shared_memory_path())
         current_task_text = await self._read_or_empty(self.current_task_path())
+        current_test_text = await self._read_or_empty(self.current_test_path())
         parts = [
             f"# Context for {agent_name}",
             "",
@@ -90,6 +95,9 @@ class MemoryManager:
             "",
             "## Current Task",
             current_task_text if current_task_text.strip() else "_пусто_",
+            "",
+            "## Current Test",
+            current_test_text if current_test_text.strip() else "(no current test)",
         ]
         if task is not None:
             parts.extend(["", "## Task", task])
