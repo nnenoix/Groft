@@ -44,6 +44,7 @@ function App() {
   }, [state.uiSettings]);
 
   useEffect(() => {
+    let focusTimer: number | null = null;
     function onKey(e: KeyboardEvent) {
       const mod = e.metaKey || e.ctrlKey;
       const target = e.target as HTMLElement | null;
@@ -77,7 +78,9 @@ function App() {
       } else if (e.key === "/" && !inField && !mod) {
         e.preventDefault();
         setStateRaw((prev) => ({ ...prev, composerOpen: true }));
-        setTimeout(() => {
+        if (focusTimer !== null) window.clearTimeout(focusTimer);
+        focusTimer = window.setTimeout(() => {
+          focusTimer = null;
           const composer = document.querySelector(
             "[data-composer-input]",
           ) as HTMLElement | null;
@@ -86,7 +89,10 @@ function App() {
       }
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (focusTimer !== null) window.clearTimeout(focusTimer);
+    };
   }, []);
 
   return (

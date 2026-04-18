@@ -11,11 +11,23 @@ from websockets.exceptions import ConnectionClosed
 log = logging.getLogger(__name__)
 
 
+class ClientNotConnectedError(RuntimeError):
+    """Raised when a send/* method runs before connect() or after disconnect()."""
+
+
 class CommunicationClient:
     def __init__(self, agent_name: str, ws_url: str = "ws://localhost:8765") -> None:
         self._agent_name = agent_name
         self._ws_url = ws_url
         self._ws: WebSocketClientProtocol | None = None
+
+    def _require_ws(self) -> WebSocketClientProtocol:
+        ws = self._ws
+        if ws is None:
+            raise ClientNotConnectedError(
+                f"CommunicationClient(agent={self._agent_name!r}) not connected"
+            )
+        return ws
 
     async def connect(self) -> None:
         self._ws = await websockets.connect(self._ws_url)
@@ -33,8 +45,8 @@ class CommunicationClient:
             self._ws = None
 
     async def send(self, to: str, content: str) -> None:
-        assert self._ws is not None
-        await self._ws.send(
+        ws = self._require_ws()
+        await ws.send(
             json.dumps(
                 {
                     "type": "message",
@@ -46,18 +58,18 @@ class CommunicationClient:
         )
 
     async def broadcast(self, content: str) -> None:
-        assert self._ws is not None
-        await self._ws.send(
+        ws = self._require_ws()
+        await ws.send(
             json.dumps(
                 {"type": "broadcast", "from": self._agent_name, "content": content}
             )
         )
 
     async def snapshot(self, terminal: str, agent: str | None = None) -> None:
-        assert self._ws is not None
+        ws = self._require_ws()
         # agent overrides the registered name so an orchestrator can relay
         # snapshots captured from other tmux panes without masquerading.
-        await self._ws.send(
+        await ws.send(
             json.dumps(
                 {
                     "type": "snapshot",
@@ -68,26 +80,26 @@ class CommunicationClient:
         )
 
     async def status(self, status: str, **extras: Any) -> None:
-        assert self._ws is not None
+        ws = self._require_ws()
         payload: dict[str, Any] = {
             "type": "status",
             "agent": self._agent_name,
             "status": status,
         }
         payload.update(extras)
-        await self._ws.send(json.dumps(payload))
+        await ws.send(json.dumps(payload))
 
     async def status_for(self, agent: str, status: str, **extras: Any) -> None:
         # used by orchestrator to report on agents it monitors but isn't
         # registered as — e.g. watchdog reporting worker health.
-        assert self._ws is not None
+        ws = self._require_ws()
         payload: dict[str, Any] = {
             "type": "status",
             "agent": agent,
             "status": status,
         }
         payload.update(extras)
-        await self._ws.send(json.dumps(payload))
+        await ws.send(json.dumps(payload))
 
     async def tasks(
         self,
@@ -95,7 +107,7 @@ class CommunicationClient:
         current: list | None = None,
         done: list | None = None,
     ) -> None:
-        assert self._ws is not None
+        ws = self._require_ws()
         payload: dict = {"type": "tasks"}
         if backlog is not None:
             payload["backlog"] = backlog
@@ -103,12 +115,12 @@ class CommunicationClient:
             payload["current"] = current
         if done is not None:
             payload["done"] = done
-        await self._ws.send(json.dumps(payload))
+        await ws.send(json.dumps(payload))
 
     async def listen(self) -> AsyncIterator[dict]:
-        assert self._ws is not None
+        ws = self._require_ws()
         try:
-            async for raw in self._ws:
+            async for raw in ws:
                 try:
                     data = json.loads(raw)
                 except Exception:

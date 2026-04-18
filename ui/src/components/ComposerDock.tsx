@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { Avatar } from "./primitives/Avatar";
 import { Icon } from "./icons";
 
@@ -7,12 +7,24 @@ interface ComposerDockProps {
 }
 
 export function ComposerDock({ onOpen }: ComposerDockProps) {
+  const focusTimerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (focusTimerRef.current !== null) {
+        window.clearTimeout(focusTimerRef.current);
+        focusTimerRef.current = null;
+      }
+    },
+    [],
+  );
+
   function open() {
     onOpen();
-    setTimeout(
-      () => (document.querySelector("[data-composer-input]") as HTMLElement | null)?.focus(),
-      80,
-    );
+    if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = window.setTimeout(() => {
+      focusTimerRef.current = null;
+      (document.querySelector("[data-composer-input]") as HTMLElement | null)?.focus();
+    }, 80);
   }
 
   return (

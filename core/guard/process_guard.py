@@ -89,8 +89,11 @@ class ProcessGuard:
         self._loop.create_task(self._handle_signal(signum))
 
     async def _handle_signal(self, signum: int) -> None:
-        # re-entry guard: a second Ctrl-C while prompting must not stack prompts
+        # re-entry guard: a second Ctrl-C while prompting forces shutdown so the
+        # operator always has an escape hatch if the confirmation prompt hangs
+        # (no tty, background run, etc.) short of SIGKILL.
         if self._confirming:
+            await self._shutdown()
             return
         if self.has_active_agents():
             self._confirming = True

@@ -76,6 +76,7 @@ export type Action =
       spark?: number[];
     }
   | { type: "APPEND_TERMINAL"; name: string; lines: string[] }
+  | { type: "SET_TERMINAL"; name: string; lines: string[] }
   | { type: "APPEND_LOG"; entry: Omit<LogEntry, "id"> }
   | { type: "SET_AGENT_ROSTER"; names: string[] }
   | {
@@ -175,6 +176,32 @@ function reducer(state: StoreState, action: Action): StoreState {
         merged.length > TERMINAL_BUFFER
           ? merged.slice(merged.length - TERMINAL_BUFFER)
           : merged;
+      nextAgents[idx] = { ...prev, terminalOutput: trimmed };
+      return { ...state, agents: nextAgents };
+    }
+    case "SET_TERMINAL": {
+      // snapshots arrive as a full capture-pane dump on every tick, so replace
+      // rather than append — appending re-adds the recent history each tick
+      // and the buffer-trim hides the duplication only partially.
+      const idx = state.agents.findIndex((a) => a.name === action.name);
+      const trimmed =
+        action.lines.length > TERMINAL_BUFFER
+          ? action.lines.slice(action.lines.length - TERMINAL_BUFFER)
+          : action.lines;
+      if (idx === -1) {
+        const created: AgentState = {
+          name: action.name,
+          role: action.name,
+          status: "idle",
+          currentAction: "",
+          currentTask: "",
+          model: "",
+          terminalOutput: trimmed,
+        };
+        return { ...state, agents: [...state.agents, created] };
+      }
+      const nextAgents = state.agents.slice();
+      const prev = nextAgents[idx];
       nextAgents[idx] = { ...prev, terminalOutput: trimmed };
       return { ...state, agents: nextAgents };
     }

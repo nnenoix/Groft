@@ -11,8 +11,16 @@ export function ComposerModal({ onClose }: ComposerModalProps) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const id = requestAnimationFrame(() => setMounted(true));
-    return () => cancelAnimationFrame(id);
+    let cancelled = false;
+    const id = requestAnimationFrame(() => {
+      // guard: cancelAnimationFrame can lose the race if the callback already
+      // scheduled; avoid setState after unmount.
+      if (!cancelled) setMounted(true);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
   }, []);
 
   return (

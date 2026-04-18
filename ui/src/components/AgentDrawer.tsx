@@ -6,10 +6,16 @@ import { MODEL_OPTIONS } from "../data/models";
 
 /* ---------- Internal sub-components for settings tab ---------- */
 
-function Select({ options, value }: { options: string[]; value: string }) {
+interface SelectProps {
+  options: string[];
+  value: string;
+  onChange: (v: string) => void;
+}
+function Select({ options, value, onChange }: SelectProps) {
   return (
     <select
-      defaultValue={value}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
       className="px-2 py-1 rounded-md text-[11.5px] font-mono focus:outline-none"
       style={{ background: "var(--bg-secondary)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
     >
@@ -18,27 +24,44 @@ function Select({ options, value }: { options: string[]; value: string }) {
   );
 }
 
-function Slider({ min, max, value, suffix }: { min: number; max: number; value: number; suffix?: string }) {
+interface SliderProps {
+  min: number;
+  max: number;
+  value: number;
+  suffix?: string;
+  onChange: (v: number) => void;
+}
+function Slider({ min, max, value, suffix, onChange }: SliderProps) {
   return (
     <div className="flex items-center gap-2">
-      <input type="range" min={min} max={max} defaultValue={value} className="w-28 accent-[var(--accent-primary)]" />
+      <input
+        type="range"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-28 accent-[var(--accent-primary)]"
+      />
       <span className="font-mono text-[11px]" style={{ color: "var(--text-muted)" }}>{value}{suffix}</span>
     </div>
   );
 }
 
-function Toggle({ checked }: { checked?: boolean }) {
-  const [on, setOn] = useState(!!checked);
+interface ToggleProps {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}
+function Toggle({ checked, onChange }: ToggleProps) {
   return (
     <button
-      onClick={() => setOn((v) => !v)}
+      onClick={() => onChange(!checked)}
       className="w-9 h-5 rounded-full transition-colors"
-      style={{ background: on ? "var(--accent-primary)" : "var(--border)" }}
-      aria-checked={on}
+      style={{ background: checked ? "var(--accent-primary)" : "var(--border)" }}
+      aria-checked={checked}
     >
       <span
         className="block w-3.5 h-3.5 rounded-full bg-white transition-transform mx-[3px]"
-        style={{ transform: on ? "translateX(16px)" : "translateX(0)" }}
+        style={{ transform: checked ? "translateX(16px)" : "translateX(0)" }}
       />
     </button>
   );
@@ -95,12 +118,32 @@ interface AgentDrawerProps {
 export function AgentDrawer({ agent, onClose, onOpenTerminal }: AgentDrawerProps) {
   const [tab, setTab] = useState<DrawerTab>("state");
   const [mounted, setMounted] = useState(false);
+  // settings state is driven by the currently open agent's props — reset on
+  // each agent switch so Select/Toggle reflect the fresh agent, not whatever
+  // the previous one last touched.
+  const [modelChoice, setModelChoice] = useState<string>(agent?.model ?? "");
+  const [maxTokens, setMaxTokens] = useState(120);
+  const [temperature, setTemperature] = useState(30);
+  const [stuckThreshold, setStuckThreshold] = useState(3);
+  const [autoRestart, setAutoRestart] = useState(true);
+  const [pauseOnDone, setPauseOnDone] = useState(false);
 
   useEffect(() => {
     if (agent) {
       setMounted(false);
       const id = requestAnimationFrame(() => setMounted(true));
       return () => cancelAnimationFrame(id);
+    }
+  }, [agent?.name]);
+
+  useEffect(() => {
+    if (agent) {
+      setModelChoice(agent.model);
+      setMaxTokens(120);
+      setTemperature(30);
+      setStuckThreshold(3);
+      setAutoRestart(true);
+      setPauseOnDone(false);
     }
   }, [agent?.name]);
 
@@ -183,16 +226,26 @@ export function AgentDrawer({ agent, onClose, onOpenTerminal }: AgentDrawerProps
           {tab === "settings" && (
             <div className="space-y-[var(--pad-4)]">
               <DrawerRow label="Модель" hint="Можно переопределить дефолт">
-                <Select options={[...MODEL_OPTIONS]} value={agent.model} />
+                <Select options={[...MODEL_OPTIONS]} value={modelChoice} onChange={setModelChoice} />
               </DrawerRow>
-              <DrawerRow label="Max tokens / cycle"><Slider min={10} max={200} value={120} suffix="k" /></DrawerRow>
-              <DrawerRow label="Temperature"><Slider min={0} max={100} value={30} suffix="%" /></DrawerRow>
+              <DrawerRow label="Max tokens / cycle">
+                <Slider min={10} max={200} value={maxTokens} suffix="k" onChange={setMaxTokens} />
+              </DrawerRow>
+              <DrawerRow label="Temperature">
+                <Slider min={0} max={100} value={temperature} suffix="%" onChange={setTemperature} />
+              </DrawerRow>
               <DrawerRow label="Tools" hint="Что разрешено агенту">
                 <TagInput tags={["Read", "Write", "Edit", "Bash"]} />
               </DrawerRow>
-              <DrawerRow label="Auto-restart при stuck"><Toggle checked /></DrawerRow>
-              <DrawerRow label="Stuck threshold"><Slider min={1} max={15} value={3} suffix="м" /></DrawerRow>
-              <DrawerRow label="Пауза при done"><Toggle /></DrawerRow>
+              <DrawerRow label="Auto-restart при stuck">
+                <Toggle checked={autoRestart} onChange={setAutoRestart} />
+              </DrawerRow>
+              <DrawerRow label="Stuck threshold">
+                <Slider min={1} max={15} value={stuckThreshold} suffix="м" onChange={setStuckThreshold} />
+              </DrawerRow>
+              <DrawerRow label="Пауза при done">
+                <Toggle checked={pauseOnDone} onChange={setPauseOnDone} />
+              </DrawerRow>
             </div>
           )}
 

@@ -41,6 +41,14 @@ function errorToString(e: unknown): string {
   return String(e);
 }
 
+// Telegram bot token format is `<bot_id>:<base64url-ish secret>`; accept only
+// that shape so a paste can't smuggle whitespace/quotes into run_tmux_command.
+const TELEGRAM_TOKEN_RE = /^[0-9]{5,15}:[A-Za-z0-9_-]{20,60}$/;
+// Pairing codes are short alphanumerics issued by /telegram:access.
+const PAIR_CODE_RE = /^[A-Za-z0-9_-]{4,32}$/;
+// Discord bot tokens are `<id>.<ts>.<hmac>` (dot-separated base64url).
+const DISCORD_TOKEN_RE = /^[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}$/;
+
 function useChannels(): UseChannelsResult {
   const [current, setCurrent] = useState<Messenger | null>(null);
   const [status, setStatus] = useState<ChannelStatus>("not-connected");
@@ -85,12 +93,20 @@ function useChannels(): UseChannelsResult {
         });
         if (m === "telegram") {
           const token = config.token ?? "";
+          // allowlist — any other shape would flow straight into a tmux
+          // send-keys command string below and let the user inject keystrokes.
+          if (!TELEGRAM_TOKEN_RE.test(token)) {
+            throw new Error("Invalid Telegram bot token format");
+          }
           await invoke<string>("run_tmux_command", {
             command: `/telegram:configure ${token}`,
           });
           // Stay in "connecting" — the user still has to pair via code.
         } else if (m === "discord") {
           const token = config.token ?? "";
+          if (!DISCORD_TOKEN_RE.test(token)) {
+            throw new Error("Invalid Discord bot token format");
+          }
           await invoke<string>("run_tmux_command", {
             command: `/discord:configure ${token}`,
           });
@@ -109,6 +125,9 @@ function useChannels(): UseChannelsResult {
   const pair = useCallback(async (code: string) => {
     setErrorMessage(null);
     try {
+      if (!PAIR_CODE_RE.test(code)) {
+        throw new Error("Invalid pairing code format");
+      }
       await invoke<string>("run_tmux_command", {
         command: `/telegram:access pair ${code}`,
       });

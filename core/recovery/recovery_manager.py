@@ -100,8 +100,12 @@ class RecoveryManager:
                 self._agent_watchdog.register_agent(agent_name, target)
                 watchdog_registered += 1
             else:
-                # skipped watchdog registration — surfaced via details
-                log.debug("skipped watchdog registration: %s", agent_name)
+                # surface so the operator notices — otherwise the watchdog
+                # silently stops monitoring this agent across the restart.
+                log.warning(
+                    "restore: no tmux target for agent=%s; watchdog not registered",
+                    agent_name,
+                )
                 missing.append(agent_name)
         await self._log_event(
             event="restored",

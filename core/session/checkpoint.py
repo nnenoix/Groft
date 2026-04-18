@@ -82,16 +82,20 @@ class CheckpointManager:
         await self._conn.commit()
 
     async def save(self, checkpoint: Checkpoint) -> None:
-        assert self._conn is not None
         async with self._lock:
+            # bind after the lock so a concurrent close() that nulls _conn
+            # can't race with our assert/use window
+            conn = self._conn
+            if conn is None:
+                raise RuntimeError("checkpoint manager is closed")
             # append-only history: every save is a new row so we can trace progress
-            await self._conn.execute(
+            await conn.execute(
                 "INSERT INTO checkpoints (session_id, stage, task_number, completed_tasks,"
                 " agent_states, last_commit, dependency_graph, unfinished_tasks, timestamp)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 checkpoint.to_row(),
             )
-            await self._conn.commit()
+            await conn.commit()
 
     async def load_latest(self) -> Checkpoint | None:
         assert self._conn is not None

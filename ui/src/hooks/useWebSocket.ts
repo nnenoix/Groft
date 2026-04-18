@@ -150,8 +150,11 @@ function useWebSocket({
   }, [connect]);
 
   useEffect(() => {
+    // depend only on the identity keys for the socket — `connect` is rebuilt
+    // whenever reconnectDelayMs flips, and we don't want that tearing the
+    // socket down mid-session. connectRef holds the latest closure.
     shouldRunRef.current = true;
-    connect();
+    connectRef.current();
     return () => {
       shouldRunRef.current = false;
       clearReconnectTimer();
@@ -165,8 +168,7 @@ function useWebSocket({
       }
       setStatus("disconnected");
     };
-    // intentionally run once per mount + url/agent change
-  }, [connect, clearReconnectTimer]);
+  }, [url, agentName, clearReconnectTimer]);
 
   const sendMessage = useCallback((obj: unknown): boolean => {
     const ws = wsRef.current;

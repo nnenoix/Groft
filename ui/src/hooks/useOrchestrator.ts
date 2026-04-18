@@ -212,7 +212,9 @@ function useOrchestrator(): UseOrchestratorResult {
           lines = msg.content.split(/\r?\n/);
         }
         if (!lines || lines.length === 0) return;
-        dispatch({ type: "APPEND_TERMINAL", name, lines });
+        // snapshot is a full capture-pane dump each tick — replace, don't append,
+        // otherwise the recent-history prefix accumulates and duplicates visibly.
+        dispatch({ type: "SET_TERMINAL", name, lines });
         return;
       }
       case "message": {

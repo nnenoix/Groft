@@ -45,10 +45,21 @@ class AgentWatchdog:
         self._notify_cb: Callable[[str], Awaitable[None]] | None = None
         self._status_cb: Callable[[str, str], Awaitable[None]] | None = None
         self._comm_client = comm_client
+        # strong refs for fire-and-forget snapshot tasks so CPython can't GC them
+        self._background_tasks: set[asyncio.Task[None]] = set()
+        # consecutive _capture failures per agent — escalates to log once past threshold
+        self._capture_misses: dict[str, int] = {}
 
     def register_agent(self, name: str, tmux_target: str) -> None:
+        # preserve existing state on re-register; only refresh the tmux target if
+        # it changed. Resetting last_change_time/*_fired here would starve the
+        # restart timer whenever the restore path re-registers a live agent.
         with self._lock:
-            self._agents[name] = AgentState(name=name, tmux_target=tmux_target)
+            existing = self._agents.get(name)
+            if existing is None:
+                self._agents[name] = AgentState(name=name, tmux_target=tmux_target)
+            elif existing.tmux_target != tmux_target:
+                existing.tmux_target = tmux_target
 
     def unregister_agent(self, name: str) -> None:
         with self._lock:
@@ -108,9 +119,23 @@ class AgentWatchdog:
                 *(self._capture(t) for _, t in items), return_exceptions=True
             )
             now = datetime.now(timezone.utc)
-            for (name, _), result in zip(items, results):
+            for (name, target), result in zip(items, results):
                 if isinstance(result, BaseException):
+                    # escalate: a dead tmux session would otherwise look "active"
+                    # forever because _process is skipped on failure.
+                    misses = self._capture_misses.get(name, 0) + 1
+                    self._capture_misses[name] = misses
+                    if misses == 1 or misses % 6 == 0:
+                        log.warning(
+                            "watchdog capture failed: agent=%s target=%s misses=%d err=%r",
+                            name,
+                            target,
+                            misses,
+                            result,
+                        )
                     continue
+                if name in self._capture_misses:
+                    self._capture_misses.pop(name, None)
                 await self._process(name, result, now)
 
     async def _process(self, name: str, output: str, now: datetime) -> None:
@@ -134,7 +159,9 @@ class AgentWatchdog:
                     # relay the captured pane content with the correct source
                     # agent so UI routes the frame to the right terminal view.
                     try:
-                        asyncio.create_task(self._send_snapshot(name, output))
+                        task = asyncio.create_task(self._send_snapshot(name, output))
+                        self._background_tasks.add(task)
+                        task.add_done_callback(self._background_tasks.discard)
                     except Exception:
                         log.exception(
                             "watchdog callback snapshot failed for %s", name

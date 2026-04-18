@@ -67,6 +67,8 @@ class CommunicationServer:
         self._ws_server: websockets.WebSocketServer | None = None
         self._uvicorn_server: uvicorn.Server | None = None
         self._uvicorn_task: asyncio.Task[None] | None = None
+        # strong refs to fire-and-forget tasks so CPython can't GC them mid-run
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._started = False
 
     async def start(self) -> None:
@@ -92,8 +94,15 @@ class CommunicationServer:
         )
         self._uvicorn_server = uvicorn.Server(config)
         self._uvicorn_task = asyncio.create_task(self._uvicorn_server.serve())
-        # block start() until uvicorn has bound the socket so callers can hit REST immediately
+        # block start() until uvicorn has bound the socket so callers can hit REST immediately.
+        # if the serve task dies during bind (port in use etc.), surface the exception
+        # instead of reporting "ready" on a missing REST endpoint.
         for _ in range(100):
+            if self._uvicorn_task.done():
+                exc = self._uvicorn_task.exception()
+                if exc is not None:
+                    raise exc
+                raise RuntimeError("uvicorn server exited before readiness")
             if getattr(self._uvicorn_server, "started", False):
                 break
             await asyncio.sleep(0.05)
@@ -257,7 +266,10 @@ class CommunicationServer:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
                 return
-            loop.create_task(self._broadcast_roster())
+            task = loop.create_task(self._broadcast_roster())
+            # retain strong ref so CPython doesn't GC the task mid-flight
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
     async def _broadcast_roster(self) -> None:
         # silent skip if the UI never connected; _forward_to_ui handles that too
@@ -402,9 +414,23 @@ class CommunicationServer:
         for index, line in enumerate(lines):
             if line:
                 if not await self._tmux_send(target, ["-l", "--", line]):
+                    log.warning(
+                        "tmux forward aborted mid-payload: to=%s target=%s at line %d/%d",
+                        to,
+                        target,
+                        index + 1,
+                        len(lines),
+                    )
                     return
             if index < len(lines) - 1:
                 if not await self._tmux_send(target, ["Enter"]):
+                    log.warning(
+                        "tmux forward aborted at Enter: to=%s target=%s after line %d/%d",
+                        to,
+                        target,
+                        index + 1,
+                        len(lines),
+                    )
                     return
         await self._tmux_send(target, ["Enter"])
 

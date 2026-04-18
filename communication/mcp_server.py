@@ -20,8 +20,11 @@ REST_URL = os.environ.get("REST_URL", "http://localhost:8766")
 server = FastMCP("claudeorch-comms")
 client = CommunicationClient(agent_name=AGENT_NAME, ws_url=WS_URL)
 inbox: list[dict] = []
+_inbox_lock = asyncio.Lock()
 _connected = False
 _connect_lock = asyncio.Lock()
+# strong refs to keep the consume loop alive across GC cycles
+_background_tasks: set[asyncio.Task] = set()
 
 
 async def _ensure_connected() -> None:
@@ -32,13 +35,16 @@ async def _ensure_connected() -> None:
         if _connected:
             return
         await client.connect()
-        asyncio.create_task(_consume())
+        task = asyncio.create_task(_consume())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
         _connected = True
 
 
 async def _consume() -> None:
     async for msg in client.listen():
-        inbox.append(msg)
+        async with _inbox_lock:
+            inbox.append(msg)
 
 
 @server.tool()
@@ -61,10 +67,11 @@ async def broadcast_message(content: str) -> str:
 async def get_messages() -> str:
     """Получить и очистить входящие сообщения для этого агента."""
     await _ensure_connected()
-    if not inbox:
-        return "Нет новых сообщений"
-    msgs = inbox.copy()
-    inbox.clear()
+    async with _inbox_lock:
+        if not inbox:
+            return "Нет новых сообщений"
+        msgs = inbox.copy()
+        inbox.clear()
     return json.dumps(msgs, ensure_ascii=False)
 
 

@@ -37,6 +37,7 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
   const [thinking, setThinking] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const thinkingTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!settingsOpen && !slashOpen) return;
@@ -50,10 +51,25 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
     return () => document.removeEventListener("mousedown", onDown);
   }, [settingsOpen, slashOpen]);
 
+  useEffect(() => {
+    return () => {
+      if (thinkingTimerRef.current !== null) {
+        window.clearTimeout(thinkingTimerRef.current);
+        thinkingTimerRef.current = null;
+      }
+    };
+  }, []);
+
   function submit() {
     if (!text.trim()) return;
     setThinking(true);
-    setTimeout(() => setThinking(false), 1800);
+    if (thinkingTimerRef.current !== null) {
+      window.clearTimeout(thinkingTimerRef.current);
+    }
+    thinkingTimerRef.current = window.setTimeout(() => {
+      thinkingTimerRef.current = null;
+      setThinking(false);
+    }, 1800);
     onSubmit?.({ text, mode, model });
     setText("");
   }

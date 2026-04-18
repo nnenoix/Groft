@@ -71,6 +71,12 @@ async def main() -> None:
     configure_logging(log_dir=PROJECT_ROOT / ".claudeorch" / "logs")
     lead_tmux_target, agent_tmux_targets = _load_tmux_config(CONFIG_PATH)
 
+    # install signal handlers before anything binds ports / opens files so a
+    # Ctrl-C during boot lands in the guard instead of aborting mid-startup
+    # and leaving the WS server or duckdb connections orphaned.
+    process_guard = ProcessGuard()
+    process_guard.install()
+
     comm_server = CommunicationServer(
         lead_tmux_target=lead_tmux_target,
         agent_tmux_targets=agent_tmux_targets,
@@ -84,7 +90,6 @@ async def main() -> None:
     await comm_client.connect()
 
     checkpoint_manager = CheckpointManager()
-    process_guard = ProcessGuard()
     agent_watchdog = AgentWatchdog(comm_client=comm_client)
     error_handler = ErrorHandler()
     git_manager = GitManager()
@@ -116,9 +121,6 @@ async def main() -> None:
     # any agents spawner already tracks (empty at boot, non-empty after restore)
     for name, target in spawner.get_tmux_targets().items():
         agent_watchdog.register_agent(name, target)
-
-    # install must run inside the loop so signal handlers attach to it
-    process_guard.install()
 
     # session_id is stable for the lifetime of this process; checkpoints share it
     session_id = str(uuid4())
