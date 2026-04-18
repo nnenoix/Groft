@@ -21,6 +21,9 @@ export interface UseChannelsResult {
   pair: (code: string) => Promise<void>;
   disconnect: () => Promise<void>;
   testWebhook: (cfg: { url: string; secret: string }) => Promise<boolean>;
+  configureTelegram: (token: string) => Promise<void>;
+  pairTelegram: (code: string) => Promise<void>;
+  getTelegramStatus: () => Promise<ChannelStatus>;
 }
 
 function toChannelStatus(raw: string): ChannelStatus {
@@ -43,11 +46,11 @@ function errorToString(e: unknown): string {
 
 // Telegram bot token format is `<bot_id>:<base64url-ish secret>`; accept only
 // that shape so a paste can't smuggle whitespace/quotes into run_tmux_command.
-const TELEGRAM_TOKEN_RE = /^[0-9]{5,15}:[A-Za-z0-9_-]{20,60}$/;
+export const TELEGRAM_TOKEN_RE = /^[0-9]{5,15}:[A-Za-z0-9_-]{20,60}$/;
 // Pairing codes are short alphanumerics issued by /telegram:access.
-const PAIR_CODE_RE = /^[A-Za-z0-9_-]{4,32}$/;
+export const PAIR_CODE_RE = /^[A-Za-z0-9_-]{4,32}$/;
 // Discord bot tokens are `<id>.<ts>.<hmac>` (dot-separated base64url).
-const DISCORD_TOKEN_RE = /^[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}$/;
+export const DISCORD_TOKEN_RE = /^[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}$/;
 
 function useChannels(): UseChannelsResult {
   const [current, setCurrent] = useState<Messenger | null>(null);
@@ -181,6 +184,28 @@ function useChannels(): UseChannelsResult {
     [],
   );
 
+  const configureTelegram = useCallback(
+    (token: string) => connect("telegram", { token }),
+    [connect],
+  );
+
+  const pairTelegram = useCallback((code: string) => pair(code), [pair]);
+
+  const getTelegramStatus = useCallback(async (): Promise<ChannelStatus> => {
+    try {
+      const raw = await invoke<string>("get_messenger_status", {
+        messenger: "telegram",
+      });
+      const mapped = toChannelStatus(raw);
+      setStatus(mapped);
+      if (mapped === "connected") setCurrent("telegram");
+      return mapped;
+    } catch (err) {
+      log.info("telegram status unavailable", err);
+      return "not-connected";
+    }
+  }, []);
+
   return {
     current,
     status,
@@ -190,6 +215,9 @@ function useChannels(): UseChannelsResult {
     pair,
     disconnect,
     testWebhook,
+    configureTelegram,
+    pairTelegram,
+    getTelegramStatus,
   };
 }
 

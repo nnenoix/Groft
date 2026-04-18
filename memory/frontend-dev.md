@@ -351,3 +351,50 @@ API: `{ status, connected, sendMessage(obj), lastMessage }`. `status` — `'disc
 - Tauri: `invoke<void>("write_agent_file", { name, content })` — rejects с string error если имя не матчит регекс или файл уже существует (backend-dev делает в `feature/ui7-agent-create-back`).
 - REST: `GET http://localhost:8766/agents/models` → `{"models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]}`.
 - Если REST недоступен (что ожидается при работе в feature-изолированной ветке без бэка) — UI использует статический список из `data/models.ts`, работает без деградации.
+
+---
+
+## Сессия UI-8 (2026-04-19) — messenger setup wizard (ветка `feature/ui8-messenger`)
+
+### Новый view: `ui/src/views/MessengerSettingsView.tsx`
+Top-tabs `Telegram / Discord / iMessage / Webhook` + контент-пэйн. Дефолт Telegram. iMessage/Discord/Webhook — stub-карточки. Полный Telegram-wizard из 4 шагов с breadcrumbs:
+1. **Bot Token** — input, submit disabled пока не матчит `TELEGRAM_TOKEN_RE`; вызов `configureTelegram(token)`.
+2. **Pair instructions** — баннер «Напиши боту `/start`», кнопки Далее/Назад.
+3. **Pair Code** — input, disabled пока не матчит `PAIR_CODE_RE`; вызов `pairTelegram(code)`.
+4. **Status** — `● Подключён` (green) / `● Ошибка — <reason>` (red) + кнопка «Отключить» (window.confirm → disconnect() → сброс на шаг 1).
+
+### Продвижение шагов через useEffect (важный нюанс)
+`useChannels.connect()/pair()` **не re-throw** ошибки — ловят и пишут в `status`/`errorMessage`. Значит thin wrappers `configureTelegram`/`pairTelegram` всегда resolve. Автопереходы сделаны через `useEffect([submitting, status, step])`: пока `submitting !== null` не двигаемся; когда submit завершился и next-render принёс `status === "connecting"` (step 1) или `"connected"` (step 3) — переход на следующий шаг. `status === "error"` остаёмся на шаге, `bannerError` показывает `errorMessage`.
+
+### Расширение `useChannels.ts`
+- `UseChannelsResult` дополнен: `configureTelegram(token)`, `pairTelegram(code)`, `getTelegramStatus()`. Старые методы не тронуты.
+- `configureTelegram(token)` = `connect("telegram", { token })`.
+- `pairTelegram(code)` = `pair(code)`.
+- `getTelegramStatus()` — `invoke("get_messenger_status", { messenger: "telegram" })`, маппит через `toChannelStatus`, обновляет локальный `status` (и `current` если connected), возвращает mapped-значение. На ошибке invoke возвращает `"not-connected"` (silent fallback, как в оригинальном probe-эффекте).
+- `TELEGRAM_TOKEN_RE`, `PAIR_CODE_RE`, `DISCORD_TOKEN_RE` теперь `export` — view использует тот же source of truth, регексы не дублирует.
+
+### Safety / TS
+- Все Telegram-значения (token, code) идут через `useChannels`, не напрямую в `invoke("run_tmux_command", …)`. Regex allowlist проверяется на фронте (button disabled) и повторно внутри `connect/pair` (throw до invoke).
+- Без новых npm-зависимостей. TS strict проходит без `any`.
+
+### Навигация
+- `"messengers"` добавлен в `NavView` union (`CommandCenterLayout.tsx`). Nav-кнопка «Каналы» с `Icon.Chat` вставлена между Terminals и Settings. Right-rail (activity log) скрыт на messengers/settings.
+- `App.tsx` — Cmd+1..5, новый `"4": "messengers"`, settings сдвинут на `"5"`.
+- `CmdK.tsx` — Навигация: пункт `view-messengers` (kbd 4), Settings (kbd ,).
+
+### Чистый перенос из `SettingsView`
+Старый stub `MessengersSettings` удалён целиком: функция, nav-пункт «Мессенджеры», `MessengerTab` interface, `SecretField` (использовался только там), импорты `StatusLabel, type Status`. В SettingsView осталось 4 раздела: general / agents / system / about. Этот stub ни с чем backend-ом не стыковался — чистое удаление без регрессий.
+
+### Probe on mount
+`getTelegramStatus()` вызывается в useEffect. До первого ответа рендерится placeholder «Проверяем статус…» (`probed` флаг). Если probe вернул `"connected"` — step сразу = 4.
+
+### Build / typecheck
+- `npx tsc --noEmit` — чисто.
+- `npm run build` — зелёный, 66 модулей (+1), bundle 298.61 kB / gzip 88.35 kB, css 27.71 kB / gzip 6.76 kB. Рост минимальный (~0.4 kB js).
+
+### Файлы
+- Новый: `ui/src/views/MessengerSettingsView.tsx`.
+- Изменены: `ui/src/hooks/useChannels.ts`, `ui/src/views/SettingsView.tsx`, `ui/src/components/CommandCenterLayout.tsx`, `ui/src/components/CmdK.tsx`, `ui/src/App.tsx`.
+
+### Commit / push
+Branch `feature/ui8-messenger` (от master), commit `ff0a0c4`, pushed to origin.

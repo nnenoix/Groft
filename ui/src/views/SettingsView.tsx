@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Icon } from "../components/icons";
-import { Avatar, StatusLabel, type Status } from "../components/primitives";
+import { Avatar } from "../components/primitives";
 import { MODEL_OPTIONS as MODELS } from "../data/models";
 import { useAgents } from "../store/agentStore";
 
@@ -20,13 +20,6 @@ interface Role {
   model: string;
   desc: string;
   locked: boolean;
-}
-
-interface MessengerTab {
-  key: string;
-  label: string;
-  status: Status;
-  account: string | null;
 }
 
 /* ---- Shared helper ---- */
@@ -154,18 +147,6 @@ function Slider({ min = 0, max = 100, value = 50, suffix = "", onChange }: {
         style={{ accentColor: "var(--accent-primary)" }}
       />
       <span className="text-[11.5px] font-mono w-12 text-right" style={{ color: "var(--text-muted)" }}>{v}{suffix}</span>
-    </div>
-  );
-}
-
-function SecretField({ placeholder, value }: { placeholder?: string; value?: string }) {
-  const [reveal, setReveal] = useState(false);
-  return (
-    <div className="flex items-center gap-2">
-      <Input type={reveal ? "text" : "password"} placeholder={placeholder} value={value} mono width={240} />
-      <button onClick={() => setReveal(!reveal)} className="btn btn-ghost text-[11px]">
-        {reveal ? "скрыть" : "показать"}
-      </button>
     </div>
   );
 }
@@ -508,80 +489,6 @@ function AgentsSettings() {
   );
 }
 
-/* ---- Messengers settings (stub — useChannels wiring in FE-8) ---- */
-
-function MessengersSettings() {
-  const [tab, setTab] = useState("telegram");
-  const tabs: MessengerTab[] = [
-    { key: "telegram", label: "Telegram", status: "connected",     account: "@orch_team_bot" },
-    { key: "imessage", label: "iMessage", status: "not-connected", account: null },
-  ];
-  const current = tabs.find((t) => t.key === tab);
-  if (!current) return null;
-
-  return (
-    <>
-      <SettingsSection title="Мессенджеры" desc="Куда приходят алерты и откуда opus принимает задачи.">
-        {tabs.map((m) => (
-          <SettingRow key={m.key} label={m.label} hint={m.account ?? "Не подключён"}>
-            <StatusLabel status={m.status} />
-            <button onClick={() => setTab(m.key)} className="btn btn-outline text-[11.5px]">Настроить</button>
-          </SettingRow>
-        ))}
-      </SettingsSection>
-
-      <SettingsSection title={`${current.label} · детали`} desc="Поля заполняются перед подключением канала.">
-        {tab === "telegram" && (
-          <>
-            <SettingRow label="Bot token" hint="Получи у @BotFather">
-              <SecretField placeholder="123456:ABC-DEF…" />
-            </SettingRow>
-            <SettingRow label="Long polling" hint="Дешевле чем webhook, но требует живого процесса">
-              <Toggle checked />
-            </SettingRow>
-            <SettingRow label="Разрешённые чаты" hint="Whitelist — оркестр не ответит незнакомцу">
-              <TagInput tags={[]} />
-            </SettingRow>
-            <SettingRow label="Переадресация алертов" hint="Кому пересылать stuck-уведомления">
-              <Input placeholder="@username" width={200} />
-            </SettingRow>
-          </>
-        )}
-        {tab === "imessage" && (
-          <>
-            <SettingRow label="Локальный bridge" hint="Только macOS · использует osascript">
-              <Toggle />
-            </SettingRow>
-            <SettingRow label="Handle" hint="Номер или email, с которого отвечает бот">
-              <Input placeholder="+7…" width={200} />
-            </SettingRow>
-            <SettingRow label="Путь к bridge" hint="Unix socket локального relay">
-              <Input value="/tmp/imessage-bridge.sock" mono width={280} />
-            </SettingRow>
-          </>
-        )}
-        <SettingRow label="Тест соединения" hint="Отправить пробный пинг прямо сейчас">
-          <button className="btn btn-outline text-[11.5px]"><Icon.Zap size={12} /> Проверить</button>
-        </SettingRow>
-      </SettingsSection>
-
-      <SettingsSection title="Фильтры уведомлений" desc="Какие события отправлять в мессенджеры.">
-        <SettingRow label="Агент stuck"><Toggle checked /></SettingRow>
-        <SettingRow label="Задача закрыта (done)"><Toggle /></SettingRow>
-        <SettingRow label="Ошибка в watchdog"><Toggle checked /></SettingRow>
-        <SettingRow label="Opus ждёт решения от пользователя"><Toggle checked /></SettingRow>
-        <SettingRow label="Quiet hours" hint="Не беспокоить с… по…">
-          <div className="flex items-center gap-2 text-[12px]">
-            <Input type="time" value="23:00" width={80} />
-            <span style={{ color: "var(--text-muted)" }}>→</span>
-            <Input type="time" value="08:00" width={80} />
-          </div>
-        </SettingRow>
-      </SettingsSection>
-    </>
-  );
-}
-
 /* ---- System settings ---- */
 
 function SystemSettings() {
@@ -708,11 +615,10 @@ export function SettingsView({ state, setState }: {
 }) {
   const [section, setSection] = useState("general");
   const navItems = [
-    { key: "general",    label: "Внешний вид", NavIcon: Icon.Sliders },
-    { key: "agents",     label: "Агенты",      NavIcon: Icon.Users },
-    { key: "messengers", label: "Мессенджеры", NavIcon: Icon.Chat },
-    { key: "system",     label: "Система",     NavIcon: Icon.Layers },
-    { key: "about",      label: "О программе", NavIcon: Icon.Heart },
+    { key: "general", label: "Внешний вид", NavIcon: Icon.Sliders },
+    { key: "agents",  label: "Агенты",      NavIcon: Icon.Users },
+    { key: "system",  label: "Система",     NavIcon: Icon.Layers },
+    { key: "about",   label: "О программе", NavIcon: Icon.Heart },
   ];
   return (
     <div className="h-full overflow-hidden flex flex-col">
@@ -733,11 +639,10 @@ export function SettingsView({ state, setState }: {
           ))}
         </nav>
         <div className="overflow-y-auto pr-2">
-          {section === "general"    && <GeneralSettings state={state} setState={setState} />}
-          {section === "agents"     && <AgentsSettings />}
-          {section === "messengers" && <MessengersSettings />}
-          {section === "system"     && <SystemSettings />}
-          {section === "about"      && <AboutSettings />}
+          {section === "general" && <GeneralSettings state={state} setState={setState} />}
+          {section === "agents"  && <AgentsSettings />}
+          {section === "system"  && <SystemSettings />}
+          {section === "about"   && <AboutSettings />}
         </div>
       </div>
     </div>

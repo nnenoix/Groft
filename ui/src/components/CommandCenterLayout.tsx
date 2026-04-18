@@ -10,9 +10,15 @@ import { AgentsView } from "../views/AgentsView";
 import { TasksView } from "../views/TasksView";
 import { TerminalsView } from "../views/TerminalsView";
 import { SettingsView, type UISettings } from "../views/SettingsView";
+import { MessengerSettingsView } from "../views/MessengerSettingsView";
 import { useAgents, useLogs, useTasks } from "../store/agentStore";
 
-export type NavView = "agents" | "tasks" | "terminals" | "settings";
+export type NavView =
+  | "agents"
+  | "tasks"
+  | "terminals"
+  | "messengers"
+  | "settings";
 
 export interface CommandCenterState {
   view: NavView;
@@ -39,10 +45,11 @@ export const INITIAL_CMD_STATE: CommandCenterState = {
 };
 
 export const NAV_ITEMS: Array<{ key: NavView; label: string; Icon: (p: { size?: number }) => React.ReactElement }> = [
-  { key: "agents",    label: "Agents",    Icon: Icon.Users },
-  { key: "tasks",     label: "Tasks",     Icon: Icon.Check },
-  { key: "terminals", label: "Terminals", Icon: Icon.Terminal },
-  { key: "settings",  label: "Settings",  Icon: Icon.Cog },
+  { key: "agents",     label: "Agents",     Icon: Icon.Users },
+  { key: "tasks",      label: "Tasks",      Icon: Icon.Check },
+  { key: "terminals",  label: "Terminals",  Icon: Icon.Terminal },
+  { key: "messengers", label: "Каналы",     Icon: Icon.Chat },
+  { key: "settings",   label: "Settings",   Icon: Icon.Cog },
 ];
 
 interface CommandCenterLayoutProps {
@@ -207,6 +214,8 @@ export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenter
           <AgentsView agents={agents} onOpenAgent={openAgent} onOpenTerminal={openTerminal} />
         ) : view === "tasks" ? (
           <TasksView tasks={tasks} />
+        ) : view === "messengers" ? (
+          <MessengerSettingsView />
         ) : view === "settings" ? (
           <SettingsView state={uiSettings} setState={setUISettings} />
         ) : (
@@ -221,7 +230,7 @@ export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenter
       </main>
 
       {/* RIGHT: activity log (xl+) */}
-      {view !== "settings" && (
+      {view !== "settings" && view !== "messengers" && (
         <aside
           className="shrink-0 hidden xl:flex flex-col min-h-0"
           style={{

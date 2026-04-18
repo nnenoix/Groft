@@ -98,10 +98,11 @@ export function CmdK({ open, onClose, setState }: CmdKProps) {
     if (cmds.length) g.push({ label: "Команды", items: cmds });
 
     const views: Item[] = ([
-      { id: "view-agents",    label: "Agents",    hint: "Обзор всех агентов", kbd: "1", icon: "Nav" as IconKind, action: () => { setState({ view: "agents" });    onClose(); } },
-      { id: "view-tasks",     label: "Tasks",     hint: "Backlog и план",     kbd: "2", icon: "Nav" as IconKind, action: () => { setState({ view: "tasks" });     onClose(); } },
-      { id: "view-terminals", label: "Terminals", hint: "Live терминалы",     kbd: "3", icon: "Nav" as IconKind, action: () => { setState({ view: "terminals" }); onClose(); } },
-      { id: "view-settings",  label: "Settings",  hint: "Настройки",          kbd: ",", icon: "Nav" as IconKind, action: () => { setState({ view: "settings" });  onClose(); } },
+      { id: "view-agents",     label: "Agents",     hint: "Обзор всех агентов", kbd: "1", icon: "Nav" as IconKind, action: () => { setState({ view: "agents" });     onClose(); } },
+      { id: "view-tasks",      label: "Tasks",      hint: "Backlog и план",     kbd: "2", icon: "Nav" as IconKind, action: () => { setState({ view: "tasks" });      onClose(); } },
+      { id: "view-terminals",  label: "Terminals",  hint: "Live терминалы",     kbd: "3", icon: "Nav" as IconKind, action: () => { setState({ view: "terminals" });  onClose(); } },
+      { id: "view-messengers", label: "Каналы",     hint: "Мессенджеры",        kbd: "4", icon: "Nav" as IconKind, action: () => { setState({ view: "messengers" }); onClose(); } },
+      { id: "view-settings",   label: "Settings",   hint: "Настройки",          kbd: ",", icon: "Nav" as IconKind, action: () => { setState({ view: "settings" });   onClose(); } },
     ] as Item[]).filter((v) => match(v.label) || match(v.hint));
     if (views.length) g.push({ label: "Навигация", items: views });
 

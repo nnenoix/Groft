@@ -64,14 +64,15 @@ function App() {
         mod &&
         !e.shiftKey &&
         !e.altKey &&
-        ["1", "2", "3", "4"].includes(e.key)
+        ["1", "2", "3", "4", "5"].includes(e.key)
       ) {
         e.preventDefault();
         const map: Record<string, CommandCenterState["view"]> = {
           "1": "agents",
           "2": "tasks",
           "3": "terminals",
-          "4": "settings",
+          "4": "messengers",
+          "5": "settings",
         };
         setStateRaw((prev) => ({ ...prev, view: map[e.key] }));
         setCmdk(false);
