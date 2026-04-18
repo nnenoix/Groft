@@ -71,23 +71,36 @@ all verified in code.
 
 ## Desirable / polish
 
-- `e5d5177` `core/handoff.py:75` and `core/orchestrator.py:33,36` still
+- [x] `e5d5177` `core/handoff.py:75` and `core/orchestrator.py:33,36` still
   use `print(...)` — inconsistent with the `logging`-based policy
   introduced in the very next commit (`7b7b089`). Switch to
   `logging.getLogger(__name__)`.
+  — Закрыто в `74f00c8` (audit follow-ups, task #22). Повторный прогон
+  `git grep "print(" core/ communication/ memory/ git_manager/` на
+  текущем HEAD → 0 совпадений.
 
-- `7de65ec` `communication/server.py:_dispatch` snapshot branch logs with
+- [x] `7de65ec` `communication/server.py:_dispatch` snapshot branch logs with
   `msg_to=None` always. Analytics grouping by `to` for snapshots now
   returns "no recipient"; previously showed the sink agent. Harmless,
   but worth documenting in `communication/` comments.
+  — Закрыто в `e8ca798` (P6.2): `_log_message(sender, agent_for_ui,
+  "snapshot", msg)` — `msg_to` в `messages.duckdb` теперь несёт
+  UI-facing agent name вместо `NULL`. Исторические строки до фикса
+  остаются `NULL`, новые — с именем агента.
 
-- `865e871` `communication/mcp_server.py` — `_inbox_lock` guards
+- [x] `865e871` `communication/mcp_server.py` — `_inbox_lock` guards
   append/copy/clear, but `_ensure_connected` races on the
   `_connected` boolean between check and set without
   `_connect_lock` covering the whole path (lock is acquired, but the
   early-return `if _connected: return` reads the flag before
   acquiring). Effectively fine because the second check inside the
   lock rehandles it — worth leaving as-is but noting.
+  — Верифицировано в P6.2 (`e8ca798`): `if _connected:` единственной
+  early-return — строго под `async with _connect_lock` (см.
+  `mcp_server.py:66-68`). Повторный вызов после `_connected=True`
+  захватывает лок, читает флаг, возвращается — no-op, гонки нет.
+  `_inbox_lock` удалён вместе с in-memory inbox в P5.1 (`b88a275`),
+  инбокс теперь на aiosqlite с транзакциями.
 
 - `865e871` `ui/src/hooks/useWebSocket.ts:171` effect deps list now
   `[url, agentName, clearReconnectTimer]`. `clearReconnectTimer` is a
