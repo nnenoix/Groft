@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import websockets
 from websockets.client import WebSocketClientProtocol
@@ -50,25 +50,41 @@ class CommunicationClient:
             )
         )
 
-    async def snapshot(self, terminal: str) -> None:
+    async def snapshot(self, terminal: str, agent: str | None = None) -> None:
         assert self._ws is not None
+        # agent overrides the registered name so an orchestrator can relay
+        # snapshots captured from other tmux panes without masquerading.
         await self._ws.send(
             json.dumps(
                 {
                     "type": "snapshot",
-                    "agent": self._agent_name,
+                    "agent": agent or self._agent_name,
                     "terminal": terminal,
                 }
             )
         )
 
-    async def status(self, status: str) -> None:
+    async def status(self, status: str, **extras: Any) -> None:
         assert self._ws is not None
-        await self._ws.send(
-            json.dumps(
-                {"type": "status", "agent": self._agent_name, "status": status}
-            )
-        )
+        payload: dict[str, Any] = {
+            "type": "status",
+            "agent": self._agent_name,
+            "status": status,
+        }
+        payload.update(extras)
+        await self._ws.send(json.dumps(payload))
+
+    async def status_for(self, agent: str, status: str, **extras: Any) -> None:
+        # used by orchestrator to report on agents it monitors but isn't
+        # registered as — e.g. watchdog reporting worker health.
+        assert self._ws is not None
+        payload: dict[str, Any] = {
+            "type": "status",
+            "agent": agent,
+            "status": status,
+        }
+        payload.update(extras)
+        await self._ws.send(json.dumps(payload))
 
     async def tasks(
         self,

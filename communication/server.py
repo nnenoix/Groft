@@ -45,6 +45,7 @@ class CommunicationServer:
         db_path: Path | str | None = None,
         lead_tmux_target: str | None = None,
         agent_tmux_targets: dict[str, str] | None = None,
+        tasks_dir: Path | str | None = None,
     ) -> None:
         self._ws_host = ws_host
         self._ws_port = ws_port
@@ -53,6 +54,7 @@ class CommunicationServer:
         self._db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
         self._lead_tmux_target = lead_tmux_target
         self._agent_tmux_targets: dict[str, str] = dict(agent_tmux_targets or {})
+        self._tasks_dir: Path | None = Path(tasks_dir) if tasks_dir is not None else None
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._db_lock = asyncio.Lock()
         self._registry: dict[str, WebSocketServerProtocol] = {}
@@ -144,8 +146,32 @@ class CommunicationServer:
         app = FastAPI()
 
         @app.get("/agents")
-        async def agents() -> dict[str, list[str]]:
-            return {"agents": self.get_connected_agents()}
+        async def agents() -> dict[str, Any]:
+            with self._lock:
+                names = list(self._registry.keys())
+                statuses = dict(self._status)
+            return {"agents": names, "statuses": statuses}
+
+        @app.get("/status")
+        async def status_snapshot() -> dict[str, str]:
+            with self._lock:
+                return dict(self._status)
+
+        @app.get("/tasks")
+        async def tasks_snapshot() -> dict[str, Any]:
+            if self._tasks_dir is None:
+                return {"type": "tasks", "backlog": [], "current": [], "done": []}
+            loop = asyncio.get_running_loop()
+            # parse_tasks_dir hits disk — offload so the event loop stays responsive
+            parsed = await loop.run_in_executor(
+                None, parse_tasks_dir, self._tasks_dir
+            )
+            return {
+                "type": "tasks",
+                "backlog": parsed.get("backlog", []),
+                "current": parsed.get("current", []),
+                "done": parsed.get("done", []),
+            }
 
         return app
 
@@ -234,37 +260,86 @@ class CommunicationServer:
                 return
             await self._route_direct(to, msg)
             await self._log_message(sender, to, "message", msg)
-            if sender == "ui" and isinstance(content, str):
-                await self._forward_to_tmux(to, content)
+            # forward to recipient's tmux pane whenever one is known. Workers
+            # don't run a WS consumer, so the tmux pane is the actual inbox.
+            if isinstance(content, str):
+                mode = msg.get("mode")
+                model = msg.get("model")
+                prefix_parts: list[str] = []
+                if isinstance(mode, str) and mode:
+                    prefix_parts.append(f"mode={mode}")
+                if isinstance(model, str) and model:
+                    prefix_parts.append(f"model={model}")
+                prefix = f"[{', '.join(prefix_parts)}] " if prefix_parts else ""
+                await self._forward_to_tmux(to, prefix + content)
         elif mtype == "broadcast":
             await self._route_broadcast(sender, msg)
             await self._log_message(sender, None, "broadcast", msg)
         elif mtype == "snapshot":
-            target = SNAPSHOT_SINK_AGENT
-            await self._route_direct(target, msg)
-            # msg_to is the sink only if it actually exists in registry, else NULL
-            with self._lock:
-                to_field = target if target in self._registry else None
-            await self._log_message(sender, to_field, "snapshot", msg)
-            # parallel forward to UI viewer (silent skip if not connected)
+            # trust the payload's `agent` so an orchestrator can relay snapshots
+            # captured from worker panes; fall back to sender for self-sourced frames.
+            payload_agent = msg.get("agent")
+            agent_for_ui = (
+                payload_agent
+                if isinstance(payload_agent, str) and payload_agent
+                else sender
+            )
+            await self._log_message(sender, None, "snapshot", msg)
             terminal = msg.get("terminal", msg.get("content", ""))
             await self._forward_to_ui(
-                {"type": "snapshot", "agent": sender, "terminal": terminal}
+                {"type": "snapshot", "agent": agent_for_ui, "terminal": terminal}
             )
         elif mtype == "status":
+            payload_agent = msg.get("agent")
+            agent_for_ui = (
+                payload_agent
+                if isinstance(payload_agent, str) and payload_agent
+                else sender
+            )
             status = msg.get("status")
             if isinstance(status, str):
                 with self._lock:
-                    self._status[sender] = status
+                    self._status[agent_for_ui] = status
             await self._log_message(sender, None, "status", msg)
-            # parallel forward to UI viewer AFTER duckdb-write (silent skip if not connected)
             if isinstance(status, str):
-                await self._forward_to_ui(
-                    {"type": "status", "agent": sender, "status": status}
-                )
+                forwarded: dict[str, Any] = {
+                    "type": "status",
+                    "agent": agent_for_ui,
+                    "status": status,
+                }
+                # pass through the optional telemetry fields the UI consumes
+                for key in (
+                    "currentAction",
+                    "currentTask",
+                    "model",
+                    "mode",
+                    "uptime",
+                    "cycles",
+                    "tokensIn",
+                    "tokensOut",
+                    "spark",
+                ):
+                    if key in msg:
+                        forwarded[key] = msg[key]
+                await self._forward_to_ui(forwarded)
         elif mtype == "tasks":
-            await self._forward_to_ui(msg)
-            await self._log_message(sender, UI_SINK_AGENT, "tasks", msg)
+            validated: dict[str, Any] = {"type": "tasks"}
+            for bucket in ("backlog", "current", "done"):
+                v = msg.get(bucket)
+                if not isinstance(v, list):
+                    continue
+                cleaned: list[dict[str, Any]] = []
+                for item in v:
+                    if (
+                        isinstance(item, dict)
+                        and isinstance(item.get("id"), str)
+                        and isinstance(item.get("title"), str)
+                        and isinstance(item.get("status"), str)
+                    ):
+                        cleaned.append(item)
+                validated[bucket] = cleaned
+            await self._forward_to_ui(validated)
+            await self._log_message(sender, UI_SINK_AGENT, "tasks", validated)
         else:
             # unknown type is silently dropped per spec
             return
@@ -389,4 +464,6 @@ class CommunicationServer:
         if tasks["done"]:
             payload["done"] = tasks["done"]
         await self._forward_to_ui(payload)
-        await self._log_message("server", UI_SINK_AGENT, "tasks", payload)
+        # reserved marker so analytics grouping by sender doesn't conjure a
+        # "server" phantom agent next to real WS clients.
+        await self._log_message("__server__", UI_SINK_AGENT, "tasks", payload)

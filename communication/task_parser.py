@@ -39,6 +39,8 @@ def _parse_bucket(text: str, bucket: str) -> list[dict[str, Any]]:
                         if d.strip() and not d.startswith("^")
                     ]
 
+        # omit owner when unknown — UI treats missing as undefined (matches the
+        # asString() guard), whereas "" would render as a blank column.
         out.append(
             {
                 "id": task_id,
@@ -46,7 +48,6 @@ def _parse_bucket(text: str, bucket: str) -> list[dict[str, Any]]:
                 "status": status,
                 "stage": stage,
                 "priority": priority,
-                "owner": "",
                 "deps": deps,
             }
         )

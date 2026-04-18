@@ -585,14 +585,19 @@ function MessengersSettings() {
 /* ---- System settings ---- */
 
 function SystemSettings() {
+  const wsUrl =
+    (import.meta.env.VITE_WS_URL as string | undefined) ?? "ws://localhost:8765";
+  const restUrl =
+    (import.meta.env.VITE_REST_URL as string | undefined) ??
+    "http://localhost:8766";
   return (
     <>
       <SettingsSection title="Коммуникация" desc="WebSocket + REST сервер оркестратора.">
         <SettingRow label="WebSocket" hint="Живое соединение с оркестром">
-          <Input value="ws://localhost:8765" mono width={240} />
+          <Input value={wsUrl} mono width={240} />
         </SettingRow>
         <SettingRow label="REST API" hint="Снэпшот ростера / задач">
-          <Input value="http://localhost:8766" mono width={240} />
+          <Input value={restUrl} mono width={240} />
         </SettingRow>
         <SettingRow label="MCP server" hint="Model Context Protocol endpoint">
           <Input value="stdio://" mono width={160} />

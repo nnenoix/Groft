@@ -43,7 +43,9 @@ function useWebSocket({
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptsRef = useRef(0);
   const shouldRunRef = useRef(true);
+  const RECONNECT_MAX_MS = 30_000;
   // use a ref for the latest connect() to break the circular dep between
   // scheduleReconnect and connect without re-creating timers on every render
   const connectRef = useRef<() => void>(() => {});
@@ -59,10 +61,15 @@ function useWebSocket({
     if (!shouldRunRef.current) return;
     if (reconnectTimerRef.current !== null) return;
     setStatus("reconnecting");
+    // exponential backoff capped at RECONNECT_MAX_MS so a dead server
+    // doesn't pin the event loop with a 3s retry loop.
+    const attempt = reconnectAttemptsRef.current;
+    const delay = Math.min(reconnectDelayMs * 2 ** attempt, RECONNECT_MAX_MS);
+    reconnectAttemptsRef.current = attempt + 1;
     reconnectTimerRef.current = window.setTimeout(() => {
       reconnectTimerRef.current = null;
       connectRef.current();
-    }, reconnectDelayMs);
+    }, delay);
   }, [reconnectDelayMs]);
 
   const connect = useCallback(() => {
@@ -91,6 +98,8 @@ function useWebSocket({
       try {
         ws.send(JSON.stringify({ type: "register", agent: agentName }));
         setStatus("connected");
+        // successful handshake — reset backoff so the next drop retries fast
+        reconnectAttemptsRef.current = 0;
       } catch {
         setStatus("reconnecting");
         scheduleReconnect();

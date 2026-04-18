@@ -114,10 +114,23 @@ export interface UseOrchestratorResult {
  * clients — it only records them. UI will still react if/when the orchestrator
  * broadcasts status, or if this behaviour changes.
  */
+const WS_URL =
+  (import.meta.env.VITE_WS_URL as string | undefined) ?? "ws://localhost:8765";
+const REST_URL =
+  (import.meta.env.VITE_REST_URL as string | undefined) ??
+  "http://localhost:8766";
+
+// roster filter — "ui" is the viewer itself; opus is kept so the orchestrator
+// still appears in the agents view.
+const ROSTER_HIDDEN = new Set(["ui"]);
+function cleanRoster(names: string[]): string[] {
+  return names.filter((n) => !ROSTER_HIDDEN.has(n));
+}
+
 function useOrchestrator(): UseOrchestratorResult {
   const dispatch = useDispatch();
   const { status, connected, sendMessage, lastMessage } = useWebSocket({
-    url: "ws://localhost:8765",
+    url: WS_URL,
     agentName: "ui",
   });
 
@@ -132,7 +145,7 @@ function useOrchestrator(): UseOrchestratorResult {
     const ctrl = new AbortController();
     (async () => {
       try {
-        const resp = await fetch("http://localhost:8766/agents", {
+        const resp = await fetch(`${REST_URL}/agents`, {
           signal: ctrl.signal,
         });
         if (!resp.ok) return;
@@ -140,7 +153,7 @@ function useOrchestrator(): UseOrchestratorResult {
         if (!body || typeof body !== "object") return;
         const names = asStringArray((body as Record<string, unknown>).agents);
         if (!names) return;
-        dispatch({ type: "SET_AGENT_ROSTER", names });
+        dispatch({ type: "SET_AGENT_ROSTER", names: cleanRoster(names) });
       } catch {
         /* network error / aborted — ignored; WS roster frame may still arrive */
       }
@@ -179,17 +192,18 @@ function useOrchestrator(): UseOrchestratorResult {
         const name = asString(msg.agent);
         if (!name) return;
         // server.py ships `terminal` as a single string; accept `lines`/`content` too
-        // in case future server versions attach them.
+        // in case future server versions attach them. Empty lines are preserved so
+        // pane separators don't collapse the vertical structure of the capture.
         let lines: string[] | null = null;
         const terminal = msg.terminal;
         if (typeof terminal === "string") {
-          lines = terminal.split(/\r?\n/).filter((l) => l.length > 0);
+          lines = terminal.split(/\r?\n/);
         } else if (Array.isArray(msg.lines)) {
           lines = (msg.lines as unknown[]).filter(
             (x): x is string => typeof x === "string",
           );
         } else if (typeof msg.content === "string") {
-          lines = msg.content.split(/\r?\n/).filter((l) => l.length > 0);
+          lines = msg.content.split(/\r?\n/);
         }
         if (!lines || lines.length === 0) return;
         dispatch({ type: "APPEND_TERMINAL", name, lines });
@@ -218,7 +232,7 @@ function useOrchestrator(): UseOrchestratorResult {
       case "roster": {
         const names = asStringArray(msg.agents);
         if (!names) return;
-        dispatch({ type: "SET_AGENT_ROSTER", names });
+        dispatch({ type: "SET_AGENT_ROSTER", names: cleanRoster(names) });
         return;
       }
       case "tasks": {

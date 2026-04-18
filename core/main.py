@@ -65,6 +65,7 @@ async def main() -> None:
     comm_server = CommunicationServer(
         lead_tmux_target=lead_tmux_target,
         agent_tmux_targets=agent_tmux_targets,
+        tasks_dir=PROJECT_ROOT / "tasks",
     )
     await comm_server.start()
 
@@ -138,13 +139,38 @@ async def main() -> None:
         await checkpoint_manager.save(current_checkpoint())
 
     async def restart_claude_code(agent_name: str = "opus") -> None:
-        # TODO: real restart via tmux respawn — for now just emit a trace line
-        # so the callback chain is exercised end-to-end during smoke tests.
-        print(f"[restart requested] agent={agent_name}")
+        # self-restart would kill the orchestrator mid-run; skip defensively.
+        if agent_name == "opus":
+            print(f"[main] restart skipped for self: {agent_name}")
+            return
+        try:
+            await spawner.despawn(agent_name)
+        except Exception as exc:
+            print(f"[main] despawn failed during restart agent={agent_name}: {exc}")
+        try:
+            await spawner.spawn(agent_name)
+        except Exception as exc:
+            print(f"[main] spawn failed during restart agent={agent_name}: {exc}")
+        # tell the UI the agent is coming back so the badge flips to restarting
+        try:
+            await comm_client.status_for(agent_name, "restarting")
+        except Exception as exc:
+            print(f"[main] status_for restarting failed agent={agent_name}: {exc}")
 
     async def notify_ui_stuck(agent_name: str) -> None:
-        # comm_client.send is async; wrapping keeps the signature explicit
-        await comm_client.send("ui", f"Agent {agent_name} is stuck")
+        # typed status frame so the UI agent row turns stuck, not just the log feed.
+        try:
+            await comm_client.status_for(agent_name, "stuck")
+        except Exception as exc:
+            print(f"[main] status_for stuck failed agent={agent_name}: {exc}")
+
+    async def emit_watchdog_status(agent_name: str, status: str) -> None:
+        try:
+            await comm_client.status_for(agent_name, status)
+        except Exception as exc:
+            print(
+                f"[main] status_for failed agent={agent_name} status={status}: {exc}"
+            )
 
     async def wake_up_agent(agent_name: str) -> None:
         await comm_client.send(agent_name, "wake up, are you there?")
@@ -156,6 +182,7 @@ async def main() -> None:
     agent_watchdog.set_wake_up_callback(wake_up_agent)
     agent_watchdog.set_restart_callback(restart_claude_code)
     agent_watchdog.set_notification_callback(notify_ui_stuck)
+    agent_watchdog.set_status_callback(emit_watchdog_status)
 
     result = await recovery_manager.initialize()
 
@@ -174,11 +201,48 @@ async def main() -> None:
 
     await agent_watchdog.start()
 
+    async def consume_opus_inbox() -> None:
+        # Drain frames addressed to opus so UI `message` frames don't pile up
+        # on a dead socket. No routing yet — log so the trace is visible.
+        try:
+            async for frame in comm_client.listen():
+                mtype = frame.get("type")
+                sender = frame.get("from") or "?"
+                content = frame.get("content")
+                print(
+                    f"[opus-inbox] type={mtype} from={sender} content={content!r}"
+                )
+        except Exception as exc:
+            print(f"[opus-inbox] listen stopped: {exc}")
+
+    async def poll_tasks_loop() -> None:
+        # UI's Tasks view needs a periodic push; FS watch would be nicer but
+        # keeping it trivial until there's a concrete cost signal.
+        while True:
+            try:
+                await comm_server.push_tasks_to_ui(PROJECT_ROOT / "tasks")
+            except Exception as exc:
+                print(f"[tasks-poll] push failed: {exc}")
+            await asyncio.sleep(5.0)
+
+    inbox_task = asyncio.create_task(consume_opus_inbox())
+    tasks_task = asyncio.create_task(poll_tasks_loop())
+
     await process_guard.wait_for_stop()
 
     print("ClaudeOrch остановлен.")
 
     # per-step try/except so one teardown failure doesn't leak other resources
+    for bg_task in (inbox_task, tasks_task):
+        try:
+            bg_task.cancel()
+        except Exception:
+            pass
+    for bg_task in (inbox_task, tasks_task):
+        try:
+            await bg_task
+        except (asyncio.CancelledError, Exception):
+            pass
     try:
         await spawner.despawn_all()
     except Exception:
