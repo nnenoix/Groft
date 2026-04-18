@@ -70,6 +70,22 @@ class CommunicationClient:
             )
         )
 
+    async def tasks(
+        self,
+        backlog: list | None = None,
+        current: list | None = None,
+        done: list | None = None,
+    ) -> None:
+        assert self._ws is not None
+        payload: dict = {"type": "tasks"}
+        if backlog is not None:
+            payload["backlog"] = backlog
+        if current is not None:
+            payload["current"] = current
+        if done is not None:
+            payload["done"] = done
+        await self._ws.send(json.dumps(payload))
+
     async def listen(self) -> AsyncIterator[dict]:
         assert self._ws is not None
         try:

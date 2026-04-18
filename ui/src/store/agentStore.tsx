@@ -6,12 +6,23 @@ import {
   type Dispatch,
   type ReactNode,
 } from "react";
-import type { AgentStatus } from "../components/AgentCard";
-import type { Task } from "../components/TaskList";
-
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
 /* ------------------------------------------------------------------ */
+
+export type AgentStatus = "active" | "idle" | "stuck" | "restarting";
+
+export type TaskStatus = "done" | "active" | "pending";
+
+export interface Task {
+  id: string;
+  title: string;
+  stage?: string;
+  status: TaskStatus;
+  owner?: string;
+  priority?: "high" | "med" | "low";
+  deps?: string[];
+}
 
 export interface AgentState {
   name: string;
@@ -21,6 +32,13 @@ export interface AgentState {
   currentTask: string;
   model: string;
   terminalOutput: string[];
+  avatar?: string;
+  mode?: "solo" | "team";
+  uptime?: string;
+  cycles?: number;
+  tokensIn?: number;
+  tokensOut?: number;
+  spark?: number[];
 }
 
 export interface LogEntry {
@@ -49,6 +67,13 @@ export type Action =
       status: AgentStatus;
       currentAction?: string;
       currentTask?: string;
+      model?: string;
+      mode?: "solo" | "team";
+      uptime?: string;
+      cycles?: number;
+      tokensIn?: number;
+      tokensOut?: number;
+      spark?: number[];
     }
   | { type: "APPEND_TERMINAL"; name: string; lines: string[] }
   | { type: "APPEND_LOG"; entry: Omit<LogEntry, "id"> }
@@ -88,10 +113,11 @@ const INITIAL_STATE: StoreState = {
 /* Reducer                                                             */
 /* ------------------------------------------------------------------ */
 
-let logIdSeq = 0;
 function nextLogId(): string {
-  logIdSeq += 1;
-  return `log-${logIdSeq}`;
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `log-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function reducer(state: StoreState, action: Action): StoreState {
@@ -99,15 +125,20 @@ function reducer(state: StoreState, action: Action): StoreState {
     case "UPSERT_AGENT_STATUS": {
       const existingIdx = state.agents.findIndex((a) => a.name === action.name);
       if (existingIdx === -1) {
-        // unknown agent: append a minimal record so it renders
         const next: AgentState = {
           name: action.name,
           role: action.name,
           status: action.status,
           currentAction: action.currentAction ?? "",
           currentTask: action.currentTask ?? "—",
-          model: "",
+          model: action.model ?? "",
           terminalOutput: [],
+          ...(action.mode !== undefined && { mode: action.mode }),
+          ...(action.uptime !== undefined && { uptime: action.uptime }),
+          ...(action.cycles !== undefined && { cycles: action.cycles }),
+          ...(action.tokensIn !== undefined && { tokensIn: action.tokensIn }),
+          ...(action.tokensOut !== undefined && { tokensOut: action.tokensOut }),
+          ...(action.spark !== undefined && { spark: action.spark }),
         };
         return { ...state, agents: [...state.agents, next] };
       }
@@ -124,6 +155,13 @@ function reducer(state: StoreState, action: Action): StoreState {
           action.currentTask !== undefined
             ? action.currentTask
             : prev.currentTask,
+        ...(action.model !== undefined && { model: action.model }),
+        ...(action.mode !== undefined && { mode: action.mode }),
+        ...(action.uptime !== undefined && { uptime: action.uptime }),
+        ...(action.cycles !== undefined && { cycles: action.cycles }),
+        ...(action.tokensIn !== undefined && { tokensIn: action.tokensIn }),
+        ...(action.tokensOut !== undefined && { tokensOut: action.tokensOut }),
+        ...(action.spark !== undefined && { spark: action.spark }),
       };
       return { ...state, agents: nextAgents };
     }

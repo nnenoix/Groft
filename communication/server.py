@@ -14,6 +14,8 @@ from fastapi import FastAPI
 from websockets.exceptions import ConnectionClosed
 from websockets.server import WebSocketServerProtocol
 
+from communication.task_parser import parse_tasks_dir
+
 DEFAULT_DB_PATH = Path(".claudeorch/messages.duckdb")
 # snapshots forward to this agent name when connected; chosen per spec ("opus" is orchestrator)
 SNAPSHOT_SINK_AGENT = "opus"
@@ -260,6 +262,9 @@ class CommunicationServer:
                 await self._forward_to_ui(
                     {"type": "status", "agent": sender, "status": status}
                 )
+        elif mtype == "tasks":
+            await self._forward_to_ui(msg)
+            await self._log_message(sender, UI_SINK_AGENT, "tasks", msg)
         else:
             # unknown type is silently dropped per spec
             return
@@ -373,3 +378,15 @@ class CommunicationServer:
             " VALUES (nextval('messages_id_seq'), ?, ?, ?, ?, ?)",
             row,
         )
+
+    async def push_tasks_to_ui(self, tasks_dir: Path | str) -> None:
+        tasks = parse_tasks_dir(Path(tasks_dir))
+        payload: dict[str, Any] = {"type": "tasks"}
+        if tasks["backlog"]:
+            payload["backlog"] = tasks["backlog"]
+        if tasks["current"]:
+            payload["current"] = tasks["current"]
+        if tasks["done"]:
+            payload["done"] = tasks["done"]
+        await self._forward_to_ui(payload)
+        await self._log_message("server", UI_SINK_AGENT, "tasks", payload)

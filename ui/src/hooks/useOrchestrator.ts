@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import useWebSocket, { type WSStatus } from "./useWebSocket";
 import { useDispatch } from "../store/agentStore";
-import type { AgentStatus } from "../components/AgentCard";
-import type { Task, TaskStatus } from "../components/TaskList";
+import type { AgentStatus } from "../store/agentStore";
+import type { Task, TaskStatus } from "../store/agentStore";
 
 const VALID_STATUSES = new Set<AgentStatus>([
   "active",
@@ -35,6 +35,25 @@ function asStringArray(v: unknown): string[] | undefined {
   return out;
 }
 
+function asNumberArray(v: unknown): number[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: number[] = [];
+  for (const item of v) {
+    if (typeof item !== "number") return undefined;
+    out.push(item);
+  }
+  return out;
+}
+
+const VALID_PRIORITIES = new Set(["high", "med", "low"]);
+function isTaskPriority(v: unknown): v is "high" | "med" | "low" {
+  return typeof v === "string" && VALID_PRIORITIES.has(v);
+}
+
+function isMode(v: unknown): v is "solo" | "team" {
+  return v === "solo" || v === "team";
+}
+
 function asTaskArray(v: unknown): Task[] | undefined {
   if (!Array.isArray(v)) return undefined;
   const out: Task[] = [];
@@ -43,10 +62,17 @@ function asTaskArray(v: unknown): Task[] | undefined {
     const rec = raw as Record<string, unknown>;
     const id = asString(rec.id);
     const title = asString(rec.title);
-    const stage = asString(rec.stage) ?? "";
     const status = rec.status;
     if (!id || !title || !isTaskStatus(status)) return undefined;
-    out.push({ id, title, stage, status });
+    const task: Task = { id, title, status };
+    const stage = asString(rec.stage);
+    if (stage !== undefined) task.stage = stage;
+    const owner = asString(rec.owner);
+    if (owner !== undefined) task.owner = owner;
+    if (isTaskPriority(rec.priority)) task.priority = rec.priority;
+    const deps = asStringArray(rec.deps);
+    if (deps !== undefined) task.deps = deps;
+    out.push(task);
   }
   return out;
 }
@@ -60,6 +86,12 @@ function nowHHMMSS(): string {
 export interface UseOrchestratorResult {
   connected: boolean;
   status: WSStatus;
+  /**
+   * sendMessage expects an object matching the ClaudeOrch WS protocol:
+   *   { type: "message", from: "ui", to: "opus", content: string,
+   *     mode?: "solo"|"team"|"review", model?: "opus-4-7"|"sonnet-4-6"|"haiku-4-5" }
+   * opus может игнорировать mode/model или учитывать их как подсказку режима.
+   */
   sendMessage: (obj: unknown) => boolean;
 }
 
@@ -133,6 +165,13 @@ function useOrchestrator(): UseOrchestratorResult {
           status: st,
           currentAction: asString(msg.currentAction),
           currentTask: asString(msg.currentTask),
+          model: asString(msg.model),
+          mode: isMode(msg.mode) ? msg.mode : undefined,
+          uptime: asString(msg.uptime),
+          cycles: typeof msg.cycles === "number" ? msg.cycles : undefined,
+          tokensIn: typeof msg.tokensIn === "number" ? msg.tokensIn : undefined,
+          tokensOut: typeof msg.tokensOut === "number" ? msg.tokensOut : undefined,
+          spark: asNumberArray(msg.spark),
         });
         return;
       }
