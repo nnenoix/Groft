@@ -24,15 +24,16 @@ function ActivityBar({ activeView, onSelect }: ActivityBarProps) {
       {ITEMS.map((item) => {
         const isActive = item.view === activeView;
         const base =
-          "w-10 h-10 rounded-lg flex items-center justify-center text-lg transition-colors";
+          "w-10 h-10 rounded-lg flex items-center justify-center text-lg transition-colors select-none";
         const stateClasses = isActive
-          ? "bg-accent-primary text-bg-card"
+          ? "bg-accent-primary text-bg-card font-semibold"
           : "text-text-muted hover:bg-bg-secondary hover:text-text-primary";
         return (
           <button
             key={item.view}
             type="button"
             aria-label={item.label}
+            aria-pressed={isActive}
             title={item.label}
             onClick={() => onSelect(item.view)}
             className={`${base} ${stateClasses}`}

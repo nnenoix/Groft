@@ -10,56 +10,68 @@ import TerminalGrid, { type TerminalData } from "./components/TerminalGrid";
 const AGENTS: AgentCardProps[] = [
   {
     name: "backend-dev",
-    role: "API & бизнес-логика",
+    role: "backend",
     status: "active",
-    currentAction: "Пишет express-роуты",
-    currentTask: "HEALTH-1: /health endpoint",
-    model: "sonnet-4.6",
+    currentAction: "Пишет auth middleware",
+    currentTask: "AUTH-1: Авторизация",
+    model: "sonnet-4-6",
   },
   {
     name: "frontend-dev",
-    role: "React / UI",
+    role: "frontend",
     status: "active",
-    currentAction: "Создаёт layout",
-    currentTask: "UI-3: светлая тема",
-    model: "sonnet-4.6",
+    currentAction: "Создаёт LoginForm",
+    currentTask: "UI-2: Dashboard",
+    model: "sonnet-4-6",
   },
   {
     name: "tester",
-    role: "Автотесты",
+    role: "test",
     status: "idle",
-    currentAction: "Ожидает изменений",
+    currentAction: "Ожидает",
     currentTask: "—",
-    model: "haiku-4.5",
+    model: "haiku-4-5",
   },
   {
     name: "reviewer",
-    role: "Code review",
+    role: "review",
     status: "idle",
-    currentAction: "Ожидает PR",
+    currentAction: "Ожидает",
     currentTask: "—",
-    model: "sonnet-4.6",
+    model: "sonnet-4-6",
   },
 ];
 
-const TASKS: Task[] = [
+const BACKLOG_TASKS: Task[] = [
   {
-    id: "t1",
-    title: "HEALTH-1: /health endpoint",
-    stage: "done",
-    status: "done",
+    id: "b1",
+    title: "AUTH-1: Авторизация",
+    stage: "",
+    status: "pending",
   },
   {
-    id: "t2",
-    title: "UI-3: светлая тема",
-    stage: "active",
+    id: "b2",
+    title: "UI-2: Dashboard",
+    stage: "",
+    status: "pending",
+  },
+];
+
+const CURRENT_TASKS: Task[] = [
+  {
+    id: "c1",
+    title: "HEALTH-1: /health endpoint",
+    stage: "",
     status: "active",
   },
+];
+
+const DONE_TASKS: Task[] = [
   {
-    id: "t3",
-    title: "WS-1: WebSocket bridge",
-    stage: "pending",
-    status: "pending",
+    id: "d1",
+    title: "INIT-1: Структура проекта",
+    stage: "",
+    status: "done",
   },
 ];
 
@@ -89,33 +101,44 @@ const TERMINALS: TerminalData[] = [
     agent: "backend-dev",
     status: "active",
     lines: [
-      "12:04 Writing auth middleware...",
-      "12:04 npm install jsonwebtoken",
-      "12:05 ✓ Done",
+      "10:23 npm run dev",
+      "10:23 Server listening on :3000",
+      "10:24 GET /health 200",
+      "10:24 POST /api/auth 401",
+      "▌",
     ],
   },
   {
     agent: "frontend-dev",
     status: "active",
     lines: [
-      "12:05 Creating LoginForm.tsx...",
-      "12:05 ✓ Component ready",
+      "10:22 npm install react-hook-form",
+      "10:22 added 3 packages in 2s",
+      "10:23 Creating LoginForm.tsx",
+      "10:24 vite hmr update /src/LoginForm.tsx",
+      "▌",
     ],
   },
   {
     agent: "tester",
     status: "idle",
     lines: [
-      "12:06 Running test suite...",
-      "12:06 ✓ 6/6 passed",
+      "10:20 npm test",
+      "10:20 PASS  tests/health.test.js",
+      "10:20 Tests: 6 passed, 6 total",
+      "10:21 Ожидает изменений...",
+      "▌",
     ],
   },
   {
     agent: "reviewer",
     status: "idle",
     lines: [
-      "12:07 Reviewing auth module...",
-      "12:07 ✓ No issues found",
+      "10:18 git fetch origin",
+      "10:18 git log --oneline master..HEAD",
+      "10:19 No pending PRs",
+      "10:19 Ожидает code review...",
+      "▌",
     ],
   },
 ];
@@ -124,51 +147,59 @@ function handleChatSubmit(text: string) {
   console.log("chat submit:", text);
 }
 
-function SidebarContent({ view }: { view: ActivityView }) {
-  if (view === "agents") {
-    return (
-      <>
-        <h2 className="text-text-muted uppercase text-xs tracking-widest px-4 pt-4 pb-2">
-          Agents
-        </h2>
-        <div className="px-3 space-y-2">
-          {AGENTS.map((agent) => (
-            <AgentCard key={agent.name} {...agent} />
-          ))}
-        </div>
-      </>
-    );
-  }
-  if (view === "tasks") {
-    return (
-      <>
-        <h2 className="text-text-muted uppercase text-xs tracking-widest px-4 pt-4 pb-2">
-          Tasks
-        </h2>
-        <TaskList tasks={TASKS} />
-      </>
-    );
-  }
-  if (view === "logs") {
-    return (
-      <>
-        <h2 className="text-text-muted uppercase text-xs tracking-widest px-4 pt-4 pb-2">
-          Logs
-        </h2>
-        <div className="text-text-muted text-sm px-4">
-          Logs в главной панели
-        </div>
-      </>
-    );
-  }
+function SectionHeader({ title }: { title: string }) {
   return (
-    <>
-      <h2 className="text-text-muted uppercase text-xs tracking-widest px-4 pt-4 pb-2">
-        Settings
-      </h2>
-      <div className="text-text-muted text-sm px-4">Настройки — скоро</div>
-    </>
+    <h2 className="text-text-muted uppercase text-xs tracking-widest px-4 pt-4 pb-2">
+      {title}
+    </h2>
   );
+}
+
+function SidebarContent({ view }: { view: ActivityView }) {
+  switch (view) {
+    case "agents":
+      return (
+        <>
+          <SectionHeader title="Agents" />
+          <div className="px-3 space-y-2">
+            {AGENTS.map((agent) => (
+              <AgentCard key={agent.name} {...agent} />
+            ))}
+          </div>
+        </>
+      );
+    case "tasks":
+      return (
+        <>
+          <SectionHeader title="Backlog" />
+          <TaskList tasks={BACKLOG_TASKS} />
+          <SectionHeader title="Current" />
+          <TaskList tasks={CURRENT_TASKS} />
+          <SectionHeader title="Done" />
+          <TaskList tasks={DONE_TASKS} />
+        </>
+      );
+    case "logs":
+      return (
+        <>
+          <SectionHeader title="Logs" />
+          <div className="text-text-muted text-sm px-4 leading-relaxed">
+            Последние события — в нижней панели под терминалами.
+          </div>
+        </>
+      );
+    case "settings":
+      return (
+        <>
+          <SectionHeader title="Settings" />
+          <div className="text-text-muted text-sm px-4 space-y-2 leading-relaxed">
+            <div>Модели агентов: <span className="text-text-code">config.yml</span></div>
+            <div>WebSocket: <span className="text-text-code">localhost:8765</span></div>
+            <div className="text-text-dim">Редактирование — скоро</div>
+          </div>
+        </>
+      );
+  }
 }
 
 function App() {

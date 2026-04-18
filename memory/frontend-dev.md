@@ -134,3 +134,47 @@
 ### Созданные / изменённые файлы
 - Новые: `ui/src/components/Header.tsx`, `ActivityBar.tsx`, `TerminalGrid.tsx`.
 - Изменены: `ui/tailwind.config.js`, `ui/src/index.css`, `ui/src/App.tsx`, `ui/src/components/{AgentCard,TaskList,ChatInput,LogFeed}.tsx`.
+
+---
+
+## Сессия UI-4 (2026-04-18) — доработки activity bar / agents / tasks / terminals
+
+### Activity Bar — проверка
+Исходный код (UI-3) уже был функционально корректен: `useState<ActivityView>("agents")` по умолчанию, `ActivityBar` правильно сравнивает `item.view === activeView` и применяет `bg-accent-primary text-bg-card` для активной. Визуально «всегда активен SETTINGS» — артефакт наблюдения тимлида, не баг в логике. Тем не менее сделал три улучшения устойчивости:
+- Добавил `aria-pressed={isActive}` для доступности и упрощения отладки в dev-tools.
+- Активная кнопка теперь `font-semibold` (раньше обычный вес) — более заметный контраст.
+- Добавил `select-none` чтобы unicode-иконки не выделялись при кликах.
+- `SidebarContent` переписан на `switch` (было if-cascade с fallback в settings) — явная обработка всех четырёх вариантов `ActivityView`, TS требует exhaustive match через типизацию. Это настоящий risk-reduction: if-cascade возвращал Settings для любого неизвестного view, теперь невозможен silent fallback.
+
+### Agents панель (default view)
+`AGENTS[]` в `App.tsx` переписан:
+- backend-dev / frontend-dev — `active` + действия «Пишет auth middleware» / «Создаёт LoginForm», задачи AUTH-1 / UI-2.
+- tester / reviewer — `idle`, действие «Ожидает», задача «—».
+- Модели берутся из `/mnt/d/orchkerstr/config.yml`: `sonnet-4-6` (backend/frontend/reviewer), `haiku-4-5` (tester). Использую формат `<family>-<major>-<minor>` без префиксов `claude-` и без суффиксов `-20251001`, т.к. в UI это подпись, не идентификатор API.
+- `role` — краткие категории `backend / frontend / test / review` (было «API & бизнес-логика» и т.п.).
+- Border-l цвет статуса уже inline в `AgentCard` (UI-3) — не трогал.
+
+### Tasks панель — 3 секции
+В `App.tsx` три отдельных массива: `BACKLOG_TASKS`, `CURRENT_TASKS`, `DONE_TASKS`. Секции рендерятся через переиспользуемый `<SectionHeader title="..."/>` (вынес внутри `App.tsx`, чтобы не плодить файлы — используется только здесь) + `<TaskList tasks={...}/>` для каждой. `stage` проставлен `""` (пустая строка) — иконки статуса (▶ / ✓ / ○) уже передают всю информацию, лишний label справа только шумит.
+
+### Terminals — 4-5 строк на карточку + курсор
+Каждая терминал-карточка теперь содержит 4-5 строк реального вывода + последняя строка `"▌"` (unicode full-block-with-right-edge, U+2590). Парсер `TerminalGrid` правильно определяет `▌` как non-timestamp non-code → отрисует `text-text-terminal`, без timestamp-отступа. Никакой анимации — символ сам по себе выглядит как курсор, просил тимлид. Примеры (backend): `npm run dev`, `Server listening on :3000`, `GET /health 200`, `POST /api/auth 401`, `▌`. Команды `npm`/`git`/`python` окрасятся оранжевым через существующий `CODE_PREFIX_RE`.
+
+### Logs / Settings заглушки
+- Logs: короткая подсказка «Последние события — в нижней панели под терминалами» (реальный feed уже есть в bottom bar).
+- Settings: ссылки на `config.yml` и `localhost:8765` (WS), оформлены через `text-text-code` — оранжевый моноспейс-акцент.
+
+### Tauri окно — minimum size
+`ui/src-tauri/tauri.conf.json → app.windows[0]`:
+- `width: 800 → 1280`, `height: 600 → 800` (startup размер увеличил, иначе 2×2 grid терминалов + sidebar 256px + activity 48px не помещается без горизонтального скролла).
+- Добавил `minWidth: 900`, `minHeight: 650` — camelCase, как в Tauri 2 JSON schema (`$schema: https://schema.tauri.app/config/2`). Tauri 2.10.1.
+
+### Build
+`npm run build` зелёный, 36 модулей, ~5.4s, bundle 203.14 kB (gzip 63.99 kB), css 10.99 kB (gzip 2.91 kB). Рост vs UI-3: +0.65 kB js, +0.08 kB css — из-за больших mock-массивов и нового `SectionHeader`. Количество модулей то же (36).
+
+### Изменённые файлы
+- `ui/src/App.tsx` — полный набор моков (agents / tasks / terminals / logs), switch-based SidebarContent, SectionHeader.
+- `ui/src/components/ActivityBar.tsx` — `font-semibold`, `aria-pressed`, `select-none`.
+- `ui/src-tauri/tauri.conf.json` — window minWidth/minHeight + увеличенный стартовый размер.
+
+Новых файлов не создавал.
