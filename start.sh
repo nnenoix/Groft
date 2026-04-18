@@ -29,6 +29,8 @@ tmux new-session -d -s claudeorch \
     --dangerously-skip-permissions \
     --channels plugin:telegram@claude-plugins-official"
 echo "✓ Claude Code запущен в tmux сессии 'claudeorch'"
+echo "▶ Агенты будут спаунены Opus по запросу через AgentSpawner"
+echo "   Мониторинг: tmux list-windows -t claudeorch"
 
 # 5. Запустить UI
 echo "▶ Запуск UI..."

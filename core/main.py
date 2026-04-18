@@ -18,6 +18,7 @@ from core.error.error_handler import ErrorHandler
 from core.guard.process_guard import ProcessGuard
 from core.recovery.recovery_manager import RecoveryManager
 from core.session.checkpoint import Checkpoint, CheckpointManager
+from core.spawner import AgentSpawner
 from core.watchdog.agent_watchdog import AgentWatchdog
 from git_manager.manager import GitManager
 from memory.manager import MemoryManager
@@ -78,6 +79,7 @@ async def main() -> None:
     error_handler = ErrorHandler()
     git_manager = GitManager()
     memory_manager = MemoryManager()
+    spawner = AgentSpawner(str(PROJECT_ROOT), str(CONFIG_PATH))
 
     await checkpoint_manager.initialize()
     await error_handler.initialize()
@@ -91,6 +93,11 @@ async def main() -> None:
         error_handler,
         agent_tmux_targets=agent_tmux_targets,
     )
+
+    # register whatever agents spawner has already brought up (empty at boot;
+    # spawner becomes the source of truth as Opus spawns executors at runtime)
+    for name, target in spawner.get_tmux_targets().items():
+        agent_watchdog.register_agent(name, target)
 
     # install must run inside the loop so signal handlers attach to it
     process_guard.install()
@@ -165,6 +172,10 @@ async def main() -> None:
     print("ClaudeOrch остановлен.")
 
     # per-step try/except so one teardown failure doesn't leak other resources
+    try:
+        await spawner.despawn_all()
+    except Exception:
+        pass
     try:
         await recovery_manager.shutdown()
     except Exception:
