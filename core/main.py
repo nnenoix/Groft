@@ -256,7 +256,7 @@ async def main() -> None:
                 return
             try:
                 await orchestrator.despawn_role(arg)
-                await comm_client.status_for(arg, "active")
+                await comm_client.status_for(arg, "idle")
             except Exception:
                 log.exception("opus-inbox /despawn failed role=%s", arg)
         elif cmd == "/restart":
