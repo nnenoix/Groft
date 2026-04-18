@@ -17,29 +17,26 @@ const ICONS: Record<TaskStatus, string> = {
   pending: "○",
 };
 
-const ICON_COLORS: Record<TaskStatus, string> = {
-  done: "#00ff88",
-  active: "#00ff88",
-  pending: "#666666",
+const ICON_CLASSES: Record<TaskStatus, string> = {
+  done: "text-status-active",
+  active: "text-accent-primary",
+  pending: "text-text-dim",
 };
 
 function TaskList({ tasks }: TaskListProps) {
   return (
-    <ul className="flex flex-col gap-2">
+    <ul className="space-y-1">
       {tasks.map((task) => (
         <li
           key={task.id}
-          className="flex items-start gap-2 text-sm text-white"
+          className="flex items-center gap-2 px-3 py-2 rounded hover:bg-bg-card transition-colors"
         >
-          <span
-            className="mt-0.5 font-mono"
-            style={{ color: ICON_COLORS[task.status] }}
-          >
+          <span className={`font-mono ${ICON_CLASSES[task.status]}`}>
             {ICONS[task.status]}
           </span>
           <div className="flex flex-col">
-            <span>{task.title}</span>
-            <span className="text-[10px] text-[#666]">{task.stage}</span>
+            <span className="text-text-primary text-sm">{task.title}</span>
+            <span className="text-text-muted text-xs">{task.stage}</span>
           </div>
         </li>
       ))}

@@ -24,13 +24,15 @@ function LogFeed({ entries }: LogFeedProps) {
   return (
     <div
       ref={ref}
-      className="h-full max-h-full overflow-y-auto font-mono text-xs text-[#ccc] p-3 bg-[#0d0d0d] border-l border-[#222]"
+      className="bg-bg-secondary h-full overflow-y-auto p-4 font-mono text-xs space-y-1"
     >
       {entries.map((entry) => (
-        <div key={entry.id} className="whitespace-pre-wrap">
-          <span className="text-[#666]">[{entry.timestamp}]</span>{" "}
-          <span className="text-accent">{entry.agent}</span>:{" "}
-          <span>{entry.action}</span>
+        <div key={entry.id} className="flex gap-2 whitespace-pre-wrap">
+          <span className="text-text-muted">[{entry.timestamp}]</span>
+          <span className="text-accent-primary font-semibold">
+            {entry.agent}:
+          </span>
+          <span className="text-text-primary">{entry.action}</span>
         </div>
       ))}
     </div>

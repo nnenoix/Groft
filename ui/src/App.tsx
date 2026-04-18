@@ -86,34 +86,32 @@ function handleChatSubmit(text: string) {
 
 function App() {
   return (
-    <div className="h-screen w-screen flex flex-col bg-bg text-white overflow-hidden">
-      <div className="flex-1 flex min-h-0">
-        <aside className="w-[30%] flex flex-col border-r border-[#222] overflow-y-auto">
-          <section className="p-3 border-b border-[#222]">
-            <h2 className="text-xs uppercase tracking-wide text-[#666] mb-2">
-              Агенты
-            </h2>
-            <div className="flex flex-col gap-2">
-              {AGENTS.map((agent) => (
-                <AgentCard key={agent.name} {...agent} />
-              ))}
-            </div>
-          </section>
-          <section className="p-3">
-            <h2 className="text-xs uppercase tracking-wide text-[#666] mb-2">
-              Задачи
-            </h2>
+    <div className="h-screen w-screen bg-bg-primary text-text-primary flex flex-col overflow-hidden">
+      <div className="flex-1 flex overflow-hidden">
+        <aside className="w-[30%] bg-bg-secondary border-r border-border flex flex-col overflow-y-auto">
+          <h2 className="text-text-muted uppercase text-xs tracking-widest px-4 pt-4 pb-2">
+            Agents
+          </h2>
+          <div className="px-4 space-y-3">
+            {AGENTS.map((agent) => (
+              <AgentCard key={agent.name} {...agent} />
+            ))}
+          </div>
+          <h2 className="text-text-muted uppercase text-xs tracking-widest px-4 pt-6 pb-2">
+            Tasks
+          </h2>
+          <div className="px-2 pb-4">
             <TaskList tasks={TASKS} />
-          </section>
+          </div>
         </aside>
 
-        <main className="flex-1 bg-[#111] text-[#666] flex items-center justify-center">
+        <main className="flex-1 bg-bg-primary flex items-center justify-center text-text-dim text-2xl font-light">
           Terminals
         </main>
       </div>
 
-      <div className="h-56 border-t border-[#222] flex">
-        <div className="w-[40%] border-r border-[#222]">
+      <div className="h-56 border-t border-border flex bg-bg-secondary">
+        <div className="w-[40%] border-r border-border">
           <ChatInput onSubmit={handleChatSubmit} />
         </div>
         <div className="flex-1 min-w-0">

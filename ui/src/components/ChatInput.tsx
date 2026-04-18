@@ -22,19 +22,19 @@ function ChatInput({ onSubmit }: ChatInputProps) {
   }
 
   return (
-    <div className="flex flex-col gap-2 p-3 h-full">
+    <div className="p-4 flex flex-col gap-2 h-full">
       <textarea
         rows={3}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Опиши задачу для Opus..."
-        className="flex-1 resize-none bg-card text-white rounded-md p-2 text-sm outline-none border border-[#222] focus:border-accent"
+        className="flex-1 bg-bg-card border border-border rounded-lg p-3 text-text-primary placeholder-text-muted resize-none focus:outline-none focus:border-accent-primary transition-colors text-sm"
       />
       <button
         type="button"
         onClick={handleSubmit}
-        className="bg-accent text-black font-semibold text-sm py-2 px-3 rounded-md self-end hover:opacity-90"
+        className="bg-accent-primary hover:bg-accent-hover text-bg-primary font-medium px-4 py-2 rounded-lg transition-colors self-end"
       >
         Отправить
       </button>

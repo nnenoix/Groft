@@ -52,3 +52,35 @@
 - Подключение к реальному WS (`localhost:8765`) — задача следующих UI-* (WS-UI).
 - Правая панель «Terminals» — заглушка, реализация отдельной задачей.
 - Возможно стоит завести общий `types.ts` для `AgentStatus`/`TaskStatus`/`LogEntry` при появлении реальных источников данных.
+
+---
+
+## Сессия UI-2 (2026-04-18) — палитра Claude + визуальные улучшения
+
+### Новые токены (`tailwind.config.js → theme.extend.colors`)
+Вложенные группы вместо плоских:
+- `bg`: `primary #1a1a1a`, `secondary #222222`, `card #2a2a2a` → `bg-bg-primary`, `bg-bg-secondary`, `bg-bg-card`.
+- `text`: `primary #f0ece3`, `muted #888888`, `dim #555555` → `text-text-*`.
+- `accent`: `primary #d97757` (Anthropic tangerine), `hover #c96442`, `dim #3d2218` → `bg-accent-primary`, `hover:bg-accent-hover`, `text-accent-primary`.
+- `status`: `active #4caf7d` (зелёный), `idle #888888`, `stuck #e05252`, `restarting #d97757` → `bg-status-*`, `text-status-*`.
+- Плоский `border: "#333333"` — используется как `border-border`, `border-r border-border` и т.д. (Tailwind не конфликтует: `border-border` = `border-color: #333`, отдельное `border` остаётся utility-класс для `border-width: 1px`.) Работает: проверено сборкой.
+
+### Шрифт / глобальный стиль
+- `src/index.css`: `@import` Google Fonts Inter (400/500/600/700) **первой строкой, до `@tailwind`** (важно — CSS @import должен идти первым).
+- `@layer base` задаёт `font-family: 'Inter', system-ui, ...` и фолбэк-фон `#1a1a1a` + цвет `#f0ece3` на `html/body/#root`.
+
+### Изменения в компонентах
+- `AgentCard`: `bg-bg-card border border-border rounded-lg p-4 hover:border-accent-primary transition-colors space-y-2`. Статус-точка теперь через `bg-status-*` класс (map `STATUS_CLASSES`), не inline style — динамика сохранена. Модель — `text-accent-primary text-xs font-medium` (раньше uppercase серый, теперь оранжевый акцент).
+- `TaskList`: каждая задача = flex-строка с hover-подсветкой `hover:bg-bg-card`. Иконка active-задачи теперь `text-accent-primary` (отличается от done `text-status-active`) — раньше обе были зелёными.
+- `ChatInput`: textarea → `bg-bg-card border border-border focus:border-accent-primary`. Кнопка `bg-accent-primary hover:bg-accent-hover text-bg-primary` (оранжевая с тёмным текстом).
+- `LogFeed`: `bg-bg-secondary`, flex-layout записи, timestamp `text-text-muted`, agent `text-accent-primary font-semibold`, action `text-text-primary`.
+- `App.tsx`: layout тот же (30% / 70% верх, `h-56` низ), но секции Agents/Tasks теперь без рамок-separator — визуальное разделение через typography (uppercase tracking-widest заголовки). Главный фон `bg-bg-primary`, левая панель `bg-bg-secondary`, рамки — `border-border`. «Terminals» — `text-2xl font-light`.
+
+### Нюанс Tailwind: `border` + `border-border`
+Плоский токен `border: "#333333"` не ломает utility `border` (width). Tailwind генерирует `border-border { border-color: #333 }` отдельно от `border { border-width: 1px }`. Связка `border border-border` работает как ожидалось.
+
+### Build
+`npm run build` зелёный, 33 модуля, ~5.2s, bundle 198.52 kB (gzip 62.60 kB), css 9.37 kB (gzip 2.51 kB) — css вырос с 7.7 → 9.4 kB за счёт новых токенов + `@import url(...)` для Inter.
+
+### Изменённые файлы (без новых)
+`ui/tailwind.config.js`, `ui/src/index.css`, `ui/src/App.tsx`, `ui/src/components/{AgentCard,TaskList,ChatInput,LogFeed}.tsx`.
