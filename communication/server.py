@@ -17,6 +17,8 @@ from websockets.server import WebSocketServerProtocol
 DEFAULT_DB_PATH = Path(".claudeorch/messages.duckdb")
 # snapshots forward to this agent name when connected; chosen per spec ("opus" is orchestrator)
 SNAPSHOT_SINK_AGENT = "opus"
+# UI client (viewer) receives parallel forwards of snapshot+status; silent skip if not connected
+UI_SINK_AGENT = "ui"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -225,12 +227,22 @@ class CommunicationServer:
             with self._lock:
                 to_field = target if target in self._registry else None
             await self._log_message(sender, to_field, "snapshot", msg)
+            # parallel forward to UI viewer (silent skip if not connected)
+            terminal = msg.get("terminal", msg.get("content", ""))
+            await self._forward_to_ui(
+                {"type": "snapshot", "agent": sender, "terminal": terminal}
+            )
         elif mtype == "status":
             status = msg.get("status")
             if isinstance(status, str):
                 with self._lock:
                     self._status[sender] = status
             await self._log_message(sender, None, "status", msg)
+            # parallel forward to UI viewer AFTER duckdb-write (silent skip if not connected)
+            if isinstance(status, str):
+                await self._forward_to_ui(
+                    {"type": "status", "agent": sender, "status": status}
+                )
         else:
             # unknown type is silently dropped per spec
             return
@@ -246,6 +258,19 @@ class CommunicationServer:
             self._unregister(to, target)
         except Exception:
             self._unregister(to, target)
+
+    async def _forward_to_ui(self, payload: dict[str, Any]) -> None:
+        # best-effort push to the UI viewer; any failure is swallowed (UI may be absent/gone)
+        with self._lock:
+            target = self._registry.get(UI_SINK_AGENT)
+        if target is None:
+            return
+        try:
+            await target.send(json.dumps(payload))
+        except ConnectionClosed:
+            self._unregister(UI_SINK_AGENT, target)
+        except Exception:
+            self._unregister(UI_SINK_AGENT, target)
 
     def _resolve_tmux_target(self, to: str) -> str | None:
         target = self._agent_tmux_targets.get(to)

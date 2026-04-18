@@ -65,3 +65,37 @@
 **Нюансы:**
 - Триггер на `sender == "ui"` читается из WebSocket registration, не из `msg["from"]`. Т.е. подделать `from: "ui"` с клиента нельзя, надо зарегистрироваться как `"ui"`.
 - `content` может быть не-строкой (например, dict) — обёрнуто в `isinstance(content, str)`.
+
+### 2026-04-18 — B-UI-2 (communication/server.py)
+
+Добавил параллельный форвардинг snapshot+status на UI-клиента.
+
+**Файл:** `/mnt/d/orchkerstr/communication/server.py` — только этот.
+
+**Что добавлено:**
+- Константа `UI_SINK_AGENT = "ui"` рядом с `SNAPSHOT_SINK_AGENT`.
+- Приватный helper `_forward_to_ui(payload: dict)` — best-effort push в сокет UI-клиента через `self._registry.get("ui")`. `ConnectionClosed`/любое исключение — silent + `_unregister` на всякий случай. Нет UI в реестре → `return`.
+- В обработчик `snapshot`: ПОСЛЕ старого routing на opus и duckdb-лога — форвард `{"type":"snapshot","agent":<sender>,"terminal":<content>}`. Поле `terminal` беру из `msg["terminal"]`, с fallback на `msg["content"]` (совместимость, если клиент шлёт старое поле).
+- В обработчик `status`: ПОСЛЕ duckdb-лога — форвард `{"type":"status","agent":<sender>,"status":<status>}`. DuckDB-запись не трогал, она как была (`_log_message(sender, None, "status", msg)`). Форвард только если `status` — строка (как и запись в `self._status`).
+
+**Ключевые решения:**
+- Отправка — через тот же `self._registry.get("ui")` что и `_route_direct`. Не стал переиспользовать `_route_direct` напрямую, потому что это отдельная семантика (форвард с новой формой payload, а не проксирование исходного), плюс здесь важен silent skip без логирования.
+- `sender` — это имя из registration (`agent_name` из `_handle_connection`), как и в B-UI-1. Подделать через `msg["from"]` нельзя.
+- Порядок в `status`: сначала `_status[sender]=status` → duckdb-лог → форвард на UI. Именно в таком порядке, чтобы UI получал событие уже после того, как сервер записал факт.
+
+**Стиль:** `from __future__ import annotations`, PEP 604 unions, type hints. Без print/logging. Ошибки отправки на отвалившийся UI подавлены.
+
+**Smoke-тест (из ТЗ) — прошёл:**
+```
+$ python3 -c "...CommunicationServer(); start; sleep 2; stop"
+Server running
+```
+Завершился без трейсбека.
+
+**Доп. функциональная проверка (локально):**
+1. Подключил два клиента: `ui` и `backend-dev`. Агент шлёт `{"type":"snapshot","terminal":"pane contents here"}` → UI получает `{'type':'snapshot','agent':'backend-dev','terminal':'pane contents here'}`. Агент шлёт `{"type":"status","status":"busy"}` → UI получает `{'type':'status','agent':'backend-dev','status':'busy'}`.
+2. Тот же сценарий без UI в реестре — сервер не падает, snapshot/status обрабатываются как раньше (opus-forward + duckdb).
+
+**Нюансы:**
+- Если UI зарегистрируется ПОВТОРНО (reconnect), старый сокет эвиктится в `_register` (поведение уже было). Новый сокет получает все последующие форварды.
+- Для snapshot в логе duckdb `msg_to` = "opus" только если opus реально подключён; UI-форвард на это поле не влияет (правильно — duckdb-поле отражает первичный маршрут, а UI-форвард — отдельный канал).
