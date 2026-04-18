@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 .claudeorch/
 .claude/scheduled_tasks.lock
+ui/.claude/
 .venv/
 *.db
 *.duckdb
