@@ -26,9 +26,9 @@
 5. Всё чисто → коммит → следующая задача
 
 ### Team режим (сложные задачи)
-1. Построй граф зависимостей → architecture/graph.md
+1. Построй граф зависимостей → architecture/graph.md (опус поддерживает вручную; Python-слой его не пишет)
 2. Напиши короткое ТЗ на 1-2 задачи → architecture/current-task.md
-3. Спауни нужных агентов через AgentSpawner (каждый в своём tmux окне)
+3. Спауни нужных агентов через AgentSpawner. Используй `Orchestrator.spawn_role(name)` (см. `core/orchestrator.py`) — он валидирует role_name по `config.yml` и дергает `spawner.spawn()`. Каждый агент получает своё tmux-окно и WS-подключение.
 4. После каждого цикла агентов → тесты → аудит
 5. Проблема → коррекции агенту → тесты → аудит снова
 6. 3 попытки не помогли → rollback → новый подход
@@ -36,7 +36,7 @@
 
 ### TDD цикл (обязательно в обоих режимах)
 Перед выдачей задачи исполнителю:
-1. Сам напиши тест для задачи → architecture/current-test.md
+1. Сам напиши тест для задачи → architecture/current-test.md (файл редактирует Opus вручную — автоматизации чтения/записи пока нет; TODO: подхват тестом через memory/manager)
 2. Передай исполнителю задачу + тест
 3. Исполнитель пишет код пока тест не проходит
 4. Tester запускает тест → результат тебе
@@ -51,7 +51,7 @@
 - Стыковка: работает ли с остальным кодом?
 - Тесты: все ли случаи покрыты?
 
-Фиксируй каждое решение в architecture/decisions.md.
+Фиксируй каждое решение в architecture/decisions.md (файл ведёт Opus вручную — Python-слой в него не пишет).
 Если аудит нашёл проблему — не переходи к следующей задаче.
 
 ## Критерии выбора режима
@@ -69,7 +69,7 @@ Team если:
 - ТЗ должно быть коротким и конкретным — не более 20 строк
 - В Team режиме — не пиши код сам, только через исполнителей
 - В Solo режиме — пиши через субагента, не напрямую
-- После каждого решения записывай в architecture/decisions.md
+- После каждого решения записывай в architecture/decisions.md (вручную, это конвенция, а не автоматика)
 - Всегда проверяй результат перед переходом к следующей задаче
 - Если агент не отвечает — watchdog сообщит тебе
 - Тесты и аудит обязательны после каждого изменения в обоих режимах
@@ -94,6 +94,7 @@ git diff main..feature/{task_name}
 - Сигнатуры функций
 - Формат входных и выходных данных
 Исполнитель работает строго по интерфейсам.
+Файл ведёт Opus вручную — в Python-слое нет хелпера, который бы его заполнял.
 
 ### Контекст кэширование
 CLAUDE.md и memory файлы передавай всегда первыми в контексте.
@@ -127,27 +128,44 @@ AgentSpawner. Opus координирует через WebSocket сервер и
 snapshot терминала — используй коммуникационный сервер.
 REST API на localhost:8766/agents показывает кто подключён.
 
+Типы фреймов сервера: `register`/`unregister`, `message`, `broadcast`, `snapshot`, `status`, `tasks`, `roster`.
+Когда UI пишет в агент (`sender=="ui"`), сервер форвардит content построчно в tmux-пейн целевого агента (`communication/server.py`) — это side-effect, не RPC.
+Статусы агентов (`starting/stuck/restarting/...`) эмитит watchdog и `restart_claude_code` в `core/main.py`; UI слушает их для badge'ов.
+MCP-мост `claudeorch-comms` (`communication/mcp_server.py`) экспозит `send_message`/`broadcast_message`/`get_messages`/`get_connected_agents` — inbox в памяти процесса, теряется при рестарте MCP-сервера (fire-and-forget).
+
+## Журналы и состояние
+- `.claudeorch/checkpoints.db` (aiosqlite, append-only) — снимки сессии и agent_states для recovery.
+- `.claudeorch/messages.duckdb` — каждое WS-сообщение (DuckDB).
+- `.claudeorch/memory_log.duckdb` — события памяти (get_context, compression).
+- `.claudeorch/git_history.duckdb` — лог операций GitManager (worktree/commit/merge/rollback).
+- `.claudeorch/recovery.duckdb`, `.claudeorch/errors.duckdb` — восстановление и ошибки ErrorHandler.
+
+## Память и компактизация
+- `memory/{agent}.md` + `memory/shared.md` — markdown-файлы. Когда файл агента превышает 10KB, `MemoryManager` вызывает `claude -p` в sub-процессе для сжатия (prompt — в `memory/manager.py`). Pre-compression копия едет в `memory/archive/`.
+- Shared memory сжатие реализовано, но не триггерится автоматически — нужен ручной вызов или дополнительный триггер.
+- `SessionManager` (`memory/session_manager.py`) следит за заполнением контекста и при 80% шлёт `/compact` слэш-командой.
+
+## Обработка ошибок
+`ErrorHandler` (`core/error/error_handler.py`) классифицирует сбои: `RATE_LIMIT`/`NETWORK_ERROR` → retry, `BAD_CODE` → bad_code_cb, `CONTEXT_OVERFLOW` → compaction_cb, прочее → checkpoint + restart. Правило "3 попытки → rollback" — это стратегия Opus поверх этого handler'а.
+
+## UI-поверхность
+Папка `ui/` — Tauri + React приложение, основной интерфейс оркестратора. Запускается отдельно (`cd ui && npm run tauri dev`) или через корневой `start.sh` (`stop.sh` — для остановки). Коммуникация: WS `localhost:8765` + REST `localhost:8766`. Использует фреймы `roster`/`tasks`/`status`/`snapshot`/`message` из WS.
+
+## Артефакты старых задач
+`server.js` в корне — остаток HEALTH-1 (Express `/health`-эндпоинт). В текущем стеке не используется; удалить или перенести в отдельную историческую папку — отдельная задача.
+
 ## Интеграция с Claude Design
 
-ClaudeOrch умеет принимать handoff из Claude Design.
+ClaudeOrch детектирует handoff из Claude Design (папка `ork-handoff/`).
 
-### Как это работает:
-1. Пользователь создаёт дизайн в Claude Design
-2. Экспортирует в Claude Code (кнопка handoff)
-3. Оркестратор обнаруживает входящий дизайн пакет
-4. Opus анализирует дизайн файлы и компоненты
-5. Автоматически создаёт план реализации
-6. Спаунит агентов для написания кода по дизайну
-
-### Что приходит из Claude Design:
-- HTML/CSS компоненты
-- Дизайн система (цвета, типографика, компоненты)
-- Структура страниц и экранов
-- Описание интерактивности
+### Как это работает сейчас:
+1. Пользователь экспортирует дизайн из Claude Design в `ork-handoff/` (обычно `ork-handoff/ork/...`).
+2. При старте Python-слой (`core/handoff.py::scan_and_record_handoff`) обходит папку и **аппендит** инвентарь файлов в `architecture/design-handoff.md`, помечая handoff как «обнаружен, не проанализирован».
+3. Opus при следующей сессии читает design-handoff.md, сам анализирует HTML/CSS/скриншоты и составляет план реализации.
+4. TODO: автоматический парсинг компонентов и спаун агентов по дизайну — пока не реализовано, делается руками Opus.
 
 ### Задача Opus при получении handoff:
-- Прочитать все файлы дизайна
-- Составить план реализации компонентов
-- Определить порядок — что делать первым
-- Записать в architecture/design-handoff.md
-- Начать цикл разработки
+- Прочитать инвентарь + сами файлы дизайна.
+- Составить план реализации компонентов и дописать его под инвентарем в `architecture/design-handoff.md`.
+- Определить порядок — что делать первым.
+- Начать цикл разработки через `Orchestrator.spawn_role(...)`.

@@ -16,6 +16,8 @@ from communication.client import CommunicationClient
 from communication.server import CommunicationServer
 from core.error.error_handler import ErrorHandler
 from core.guard.process_guard import ProcessGuard
+from core.handoff import scan_and_record_handoff
+from core.orchestrator import Orchestrator
 from core.recovery.recovery_manager import RecoveryManager
 from core.session.checkpoint import Checkpoint, CheckpointManager
 from core.spawner import AgentSpawner
@@ -81,6 +83,7 @@ async def main() -> None:
     git_manager = GitManager()
     memory_manager = MemoryManager()
     spawner = AgentSpawner(str(PROJECT_ROOT), str(CONFIG_PATH))
+    orchestrator = Orchestrator(spawner)
 
     await checkpoint_manager.initialize()
     await error_handler.initialize()
@@ -198,6 +201,14 @@ async def main() -> None:
             await recovery_manager.restore_session(checkpoint)
     else:
         print("ClaudeOrch готов к работе")
+
+    try:
+        await scan_and_record_handoff(PROJECT_ROOT)
+    except Exception as exc:
+        print(f"[handoff] scan failed: {exc}")
+
+    # stash orchestrator on the client so future inbox-routed commands can reach it
+    comm_client.orchestrator = orchestrator  # type: ignore[attr-defined]
 
     await agent_watchdog.start()
 
