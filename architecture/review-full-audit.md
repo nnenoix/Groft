@@ -97,10 +97,16 @@ all verified in code.
   Consider a brief comment inline (partly already there) and an
   `// eslint-disable-next-line` if CI enforces the rule.
 
-- `7b7b089` `ui/src/utils/logger.ts` exposes `logger.exception(err, msg, ...)`
+- [x] `7b7b089` `ui/src/utils/logger.ts` exposes `logger.exception(err, msg, ...)`
   but no existing caller uses it. Either wire one (e.g. replace the raw
   `log.warn("ws send failed", err)` calls with `log.exception(err, "ws
   send failed")`) or drop the helper to keep the surface honest.
+  — Закрыто в `2c5c61c` (P1.2): `log.exception` подключён в `useWebSocket.ts`
+  (`ws send failed`, `ws teardown noop`), `useChannels.ts` (`tmux disconnect failed`)
+  и `useOrchestrator.ts:167` (`roster fetch failed`). Оставшийся
+  `log.warn("roster fetch non-ok", resp.status)` в `useOrchestrator.ts:158`
+  остаётся намеренно: это status-code предупреждение без `Error` объекта,
+  `log.exception` тут не подходит.
 
 - `e5d5177` `core/handoff.py` only runs once at startup. If `ork-handoff/`
   arrives while the orchestrator is already up, it stays invisible until
