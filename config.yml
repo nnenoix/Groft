@@ -13,6 +13,11 @@ models:
 # claude-sonnet-4-6 — баланс качества и скорости
 # claude-haiku-4-5-20251001 — быстрый и дешёвый
 
+# process — выбор бэкенда спавна. auto = tmux на POSIX, NotImplementedError на Windows (PR 2).
+# Можно явно зафиксировать: tmux | windows.
+process:
+  backend: auto
+
 # tmux — куда слать команды для Opus-тимлида и агентов (ключ — имя агента).
 # Пока все исполнители живут в окне Opus (Agent Teams in-process), поэтому дефолт один target.
 tmux:

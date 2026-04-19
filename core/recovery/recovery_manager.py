@@ -48,14 +48,14 @@ class RecoveryManager:
         process_guard: ProcessGuard,
         agent_watchdog: AgentWatchdog,
         error_handler: ErrorHandler,
-        agent_tmux_targets: dict[str, str] | None = None,
+        agent_targets: dict[str, str] | None = None,
         recovery_log_path: Path | str | None = None,
     ) -> None:
         self._checkpoint_manager = checkpoint_manager
         self._process_guard = process_guard
         self._agent_watchdog = agent_watchdog
         self._error_handler = error_handler
-        self._agent_tmux_targets: dict[str, str] = dict(agent_tmux_targets or {})
+        self._agent_targets: dict[str, str] = dict(agent_targets or {})
         self._log_path = (
             Path(recovery_log_path) if recovery_log_path is not None else DEFAULT_RECOVERY_LOG_PATH
         )
@@ -95,7 +95,7 @@ class RecoveryManager:
         for agent_name in checkpoint.agent_states.keys():
             self._process_guard.register_agent(agent_name)
             agents_registered += 1
-            target = self._agent_tmux_targets.get(agent_name)
+            target = self._agent_targets.get(agent_name)
             if target is not None:
                 self._agent_watchdog.register_agent(agent_name, target)
                 watchdog_registered += 1
@@ -103,7 +103,7 @@ class RecoveryManager:
                 # surface so the operator notices — otherwise the watchdog
                 # silently stops monitoring this agent across the restart.
                 log.warning(
-                    "restore: no tmux target for agent=%s; watchdog not registered",
+                    "restore: no target for agent=%s; watchdog not registered",
                     agent_name,
                 )
                 missing.append(agent_name)

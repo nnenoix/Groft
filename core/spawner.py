@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import warnings
 from pathlib import Path
 from typing import Any, Callable
 
 import yaml
 
+from core.process import ProcessBackend, TmuxBackend
+
 log = logging.getLogger(__name__)
 
 
 class AgentSpawner:
-    def __init__(self, project_path: str, config_path: str) -> None:
+    def __init__(
+        self,
+        project_path: str,
+        config_path: str,
+        backend: ProcessBackend | None = None,
+    ) -> None:
         self.project_path = Path(project_path)
         # config.yml may be missing or malformed during local setups; fall back
         # to an empty model map and let agents use the spawn-time default.
@@ -29,6 +37,9 @@ class AgentSpawner:
                 config_path,
                 exc_info=True,
             )
+        # default backend keeps the legacy single-arg constructor working for
+        # ad-hoc REPL use; production wiring in core/main.py always injects.
+        self._backend: ProcessBackend = backend if backend is not None else TmuxBackend()
         self.active_agents: dict[str, dict[str, Any]] = {}
         self._register_cb: Callable[[str, str], Any] | None = None
         self._unregister_cb: Callable[[str], Any] | None = None
@@ -39,37 +50,25 @@ class AgentSpawner:
     def set_unregister_callback(self, fn: Callable[[str], Any]) -> None:
         self._unregister_cb = fn
 
+    @property
+    def backend(self) -> ProcessBackend:
+        return self._backend
+
     async def spawn(self, agent_name: str) -> bool:
         models = self.config.get("models", {}) if isinstance(self.config, dict) else {}
         model = models.get(agent_name, "claude-sonnet-4-6")
-        window = f"claudeorch:{agent_name}"
-
-        if not await self._run_tmux(["new-window", "-t", "claudeorch", "-n", agent_name]):
-            log.warning("tmux new-window failed for agent=%s; aborting spawn", agent_name)
+        cmd = ["claude", "--model", model, "--dangerously-skip-permissions"]
+        env = {"AGENT_NAME": agent_name}
+        target = await self._backend.spawn(agent_name, cmd, env=env)
+        if target is None:
             return False
-
-        cmd = (
-            f"AGENT_NAME={agent_name} "
-            f"claude --model {model} "
-            f"--dangerously-skip-permissions"
-        )
-        if not await self._run_tmux(["send-keys", "-t", window, cmd, "Enter"]):
-            log.warning(
-                "tmux send-keys failed for agent=%s window=%s; aborting spawn",
-                agent_name,
-                window,
-            )
-            # best-effort teardown of the orphan window so the pane map stays clean
-            await self._run_tmux(["kill-window", "-t", window])
-            return False
-
         self.active_agents[agent_name] = {
-            "tmux_target": window,
+            "target": target,
             "model": model,
             "status": "starting",
         }
         if self._register_cb is not None:
-            result = self._register_cb(agent_name, window)
+            result = self._register_cb(agent_name, target)
             if asyncio.iscoroutine(result):
                 await result
         return True
@@ -81,7 +80,8 @@ class AgentSpawner:
             result = self._unregister_cb(agent_name)
             if asyncio.iscoroutine(result):
                 await result
-        await self._run_tmux(["kill-window", "-t", f"claudeorch:{agent_name}"])
+        target = self.active_agents[agent_name]["target"]
+        await self._backend.kill(target)
         del self.active_agents[agent_name]
         return True
 
@@ -89,34 +89,18 @@ class AgentSpawner:
         for name in list(self.active_agents.keys()):
             await self.despawn(name)
 
-    def get_tmux_targets(self) -> dict[str, str]:
+    def get_targets(self) -> dict[str, str]:
         return {
-            name: info["tmux_target"]
+            name: info["target"]
             for name, info in self.active_agents.items()
         }
 
-    @staticmethod
-    async def _run_tmux(args: list[str]) -> bool:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "tmux",
-                *args,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError:
-            log.warning("tmux binary not found; cannot run %s", args)
-            return False
-        except Exception:
-            log.warning("tmux spawn failed for args=%s", args, exc_info=True)
-            return False
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            log.warning(
-                "tmux exit=%s args=%s stderr=%s",
-                proc.returncode,
-                args,
-                stderr.decode(errors="replace").strip(),
-            )
-            return False
-        return True
+    def get_tmux_targets(self) -> dict[str, str]:
+        # legacy alias kept for any out-of-tree caller; in-tree code now uses
+        # get_targets(). Removed in a follow-up once the deprecation window passes.
+        warnings.warn(
+            "AgentSpawner.get_tmux_targets() is deprecated; use get_targets()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.get_targets()
