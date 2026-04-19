@@ -44,62 +44,68 @@ class CommunicationClient:
                 log.warning("client disconnect close failed", exc_info=True)
             self._ws = None
 
+    async def _send_json(self, payload: dict) -> None:
+        # Transparent reconnect on server-initiated 1000 "reconnect" (audit gap #3):
+        # server closes long-lived clients after N frames; watchdog/orchestrator
+        # need to resume transparently instead of silently dropping snapshots.
+        raw = json.dumps(payload)
+        try:
+            await self._require_ws().send(raw)
+            return
+        except ConnectionClosed:
+            log.info("ws closed mid-send, reconnecting and retrying once")
+            try:
+                await self.disconnect()
+            except Exception:
+                pass
+            await self.connect()
+            await self._require_ws().send(raw)
+
     async def send(self, to: str, content: str) -> None:
-        ws = self._require_ws()
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "message",
-                    "from": self._agent_name,
-                    "to": to,
-                    "content": content,
-                }
-            )
+        await self._send_json(
+            {
+                "type": "message",
+                "from": self._agent_name,
+                "to": to,
+                "content": content,
+            }
         )
 
     async def broadcast(self, content: str) -> None:
-        ws = self._require_ws()
-        await ws.send(
-            json.dumps(
-                {"type": "broadcast", "from": self._agent_name, "content": content}
-            )
+        await self._send_json(
+            {"type": "broadcast", "from": self._agent_name, "content": content}
         )
 
     async def snapshot(self, terminal: str, agent: str | None = None) -> None:
-        ws = self._require_ws()
         # agent overrides the registered name so an orchestrator can relay
         # snapshots captured from other tmux panes without masquerading.
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "snapshot",
-                    "agent": agent or self._agent_name,
-                    "terminal": terminal,
-                }
-            )
+        await self._send_json(
+            {
+                "type": "snapshot",
+                "agent": agent or self._agent_name,
+                "terminal": terminal,
+            }
         )
 
     async def status(self, status: str, **extras: Any) -> None:
-        ws = self._require_ws()
         payload: dict[str, Any] = {
             "type": "status",
             "agent": self._agent_name,
             "status": status,
         }
         payload.update(extras)
-        await ws.send(json.dumps(payload))
+        await self._send_json(payload)
 
     async def status_for(self, agent: str, status: str, **extras: Any) -> None:
         # used by orchestrator to report on agents it monitors but isn't
         # registered as — e.g. watchdog reporting worker health.
-        ws = self._require_ws()
         payload: dict[str, Any] = {
             "type": "status",
             "agent": agent,
             "status": status,
         }
         payload.update(extras)
-        await ws.send(json.dumps(payload))
+        await self._send_json(payload)
 
     async def tasks(
         self,
@@ -107,7 +113,6 @@ class CommunicationClient:
         current: list | None = None,
         done: list | None = None,
     ) -> None:
-        ws = self._require_ws()
         payload: dict = {"type": "tasks"}
         if backlog is not None:
             payload["backlog"] = backlog
@@ -115,12 +120,11 @@ class CommunicationClient:
             payload["current"] = current
         if done is not None:
             payload["done"] = done
-        await ws.send(json.dumps(payload))
+        await self._send_json(payload)
 
     async def handoff_event(self, files: list[str]) -> None:
         # pushes a {type:handoff, files:[...]} frame; server forwards it to the UI sink
-        ws = self._require_ws()
-        await ws.send(json.dumps({"type": "handoff", "files": files}))
+        await self._send_json({"type": "handoff", "files": files})
 
     async def listen(self) -> AsyncIterator[dict]:
         ws = self._require_ws()
