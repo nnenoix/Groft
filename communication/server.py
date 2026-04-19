@@ -6,18 +6,23 @@ import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import duckdb
 import uvicorn
 import websockets
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from websockets.exceptions import ConnectionClosed
 from websockets.server import WebSocketServerProtocol
 
 from communication.task_parser import parse_tasks_dir
-from core.paths import claudeorch_dir
+from core.paths import claudeorch_dir, memory_archive_dir, memory_dir
 from core.process import ProcessBackend
+
+if TYPE_CHECKING:
+    # imported lazily to sidestep any future core<->communication cycle
+    from core.orchestrator import Orchestrator
 
 log = logging.getLogger(__name__)
 # snapshots forward to this agent name when connected; chosen per spec ("opus" is orchestrator)
@@ -49,6 +54,7 @@ class CommunicationServer:
         backend: ProcessBackend | None = None,
         lead_target: str | None = None,
         tasks_dir: Path | str | None = None,
+        orchestrator: "Orchestrator | None" = None,
     ) -> None:
         self._ws_host = ws_host
         self._ws_port = ws_port
@@ -87,6 +93,13 @@ class CommunicationServer:
         self._shutdown_callback: Callable[[], Awaitable[None]] | None = None
         self._usage_task: asyncio.Task[None] | None = None
         self._started = False
+        # orchestrator is optional so unit tests (and the shutdown-only path)
+        # can construct a server without the full spawner graph. Endpoints
+        # that depend on it return 503 when it's None.
+        self._orchestrator: "Orchestrator | None" = orchestrator
+        # FastAPI app is built eagerly so tests can hit it via ASGI transport
+        # without binding ports through uvicorn.
+        self._rest_app: FastAPI = self._build_app()
 
     async def start(self) -> None:
         # idempotent: repeat calls are a no-op so orchestrator can retry safely
@@ -102,9 +115,8 @@ class CommunicationServer:
         self._ws_server = await websockets.serve(
             self._handle_connection, self._ws_host, self._ws_port
         )
-        app = self._build_app()
         config = uvicorn.Config(
-            app,
+            self._rest_app,
             host=self._rest_host,
             port=self._rest_port,
             log_level="warning",
@@ -243,6 +255,25 @@ class CommunicationServer:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, tracker.compute)
 
+        @app.post("/agents/spawn")
+        async def agents_spawn(request: Request) -> Any:
+            return await self._handle_agent_action(request, "spawn")
+
+        @app.post("/agents/despawn")
+        async def agents_despawn(request: Request) -> Any:
+            return await self._handle_agent_action(request, "despawn")
+
+        @app.post("/agents/kill")
+        async def agents_kill(request: Request) -> Any:
+            # TODO: distinguish SIGTERM (despawn) from SIGKILL (kill) once the
+            # backend exposes a force-kill path. For now kill is an alias for
+            # despawn so the UI button works end-to-end.
+            return await self._handle_agent_action(request, "kill")
+
+        @app.post("/agents/clear-history")
+        async def agents_clear_history(request: Request) -> Any:
+            return await self._handle_clear_history(request)
+
         @app.get("/tasks")
         async def tasks_snapshot() -> dict[str, Any]:
             if self._tasks_dir is None:
@@ -260,6 +291,99 @@ class CommunicationServer:
             }
 
         return app
+
+    async def _parse_role(
+        self, request: Request
+    ) -> tuple[str | None, JSONResponse | None]:
+        # Returns (role, error_response). Either role is non-empty str and
+        # error is None, or role is None and error is a 400 JSONResponse.
+        try:
+            body = await request.json()
+        except Exception:
+            return None, JSONResponse(
+                {"error": "invalid json body"}, status_code=400
+            )
+        if not isinstance(body, dict):
+            return None, JSONResponse(
+                {"error": "body must be an object"}, status_code=400
+            )
+        role = body.get("role")
+        if not isinstance(role, str) or not role.strip():
+            return None, JSONResponse(
+                {"error": "role is required"}, status_code=400
+            )
+        return role.strip(), None
+
+    async def _handle_agent_action(
+        self, request: Request, action: str
+    ) -> JSONResponse:
+        role, err = await self._parse_role(request)
+        if err is not None:
+            return err
+        assert role is not None
+        if self._orchestrator is None:
+            return JSONResponse(
+                {"error": "orchestrator not attached"}, status_code=503
+            )
+        try:
+            if action == "spawn":
+                ok = await self._orchestrator.spawn_role(role)
+            else:
+                # despawn and kill share the code path until a real force-kill
+                # lands on the backend; see TODO in agents_kill endpoint.
+                ok = await self._orchestrator.despawn_role(role)
+        except Exception:
+            log.exception("agent action failed action=%s role=%s", action, role)
+            return JSONResponse(
+                {"ok": False, "role": role, "error": "internal error"},
+                status_code=500,
+            )
+        if not ok:
+            return JSONResponse(
+                {"ok": False, "role": role, "reason": "unknown-or-active"},
+                status_code=409,
+            )
+        return JSONResponse({"ok": True, "role": role})
+
+    async def _handle_clear_history(self, request: Request) -> JSONResponse:
+        role, err = await self._parse_role(request)
+        if err is not None:
+            return err
+        assert role is not None
+        loop = asyncio.get_running_loop()
+        try:
+            cleared = await loop.run_in_executor(
+                None, self._clear_history_sync, role
+            )
+        except Exception:
+            log.exception("clear-history failed role=%s", role)
+            return JSONResponse(
+                {"ok": False, "role": role, "error": "internal error"},
+                status_code=500,
+            )
+        return JSONResponse({"ok": True, "cleared": cleared})
+
+    def _clear_history_sync(self, role: str) -> list[str]:
+        # Wipe {role}.md and any archive/{role}-*.md copies. memory_dir() and
+        # memory_archive_dir() auto-mkdir, so a fresh checkout also works.
+        cleared: list[str] = []
+        archive = memory_archive_dir()
+        for item in archive.glob(f"{role}-*.md"):
+            try:
+                item.unlink()
+                cleared.append(str(item))
+            except FileNotFoundError:
+                continue
+            except OSError:
+                log.warning(
+                    "clear-history: failed to delete %s", item, exc_info=True
+                )
+        memory_path = memory_dir() / f"{role}.md"
+        # truncate-to-empty (preserve inode) if file exists, else create empty.
+        # Parent is guaranteed by memory_dir() side-effect.
+        memory_path.write_text("", encoding="utf-8")
+        cleared.append(str(memory_path))
+        return cleared
 
     async def _usage_broadcast_loop(self) -> None:
         from core.usage_tracker import UsageTracker
