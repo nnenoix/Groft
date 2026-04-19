@@ -16,11 +16,10 @@ from websockets.exceptions import ConnectionClosed
 from websockets.server import WebSocketServerProtocol
 
 from communication.task_parser import parse_tasks_dir
+from core.paths import claudeorch_dir
 from core.process import ProcessBackend
 
 log = logging.getLogger(__name__)
-
-DEFAULT_DB_PATH = Path(".claudeorch/messages.duckdb")
 # snapshots forward to this agent name when connected; chosen per spec ("opus" is orchestrator)
 SNAPSHOT_SINK_AGENT = "opus"
 # UI client (viewer) receives parallel forwards of snapshot+status; silent skip if not connected
@@ -55,7 +54,11 @@ class CommunicationServer:
         self._ws_port = ws_port
         self._rest_host = rest_host
         self._rest_port = rest_port
-        self._db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+        self._db_path = (
+            Path(db_path)
+            if db_path is not None
+            else claudeorch_dir() / "messages.duckdb"
+        )
         # backend is optional so unit tests can construct a server without
         # process plumbing — message-forward to panes degrades to a no-op.
         self._backend: ProcessBackend | None = backend

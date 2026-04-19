@@ -38,6 +38,7 @@ import subprocess
 from pathlib import Path
 from typing import Mapping
 
+from core.paths import panes_dir
 from core.process.backend import Target
 
 log = logging.getLogger(__name__)
@@ -50,9 +51,9 @@ CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
 class WindowsBackend:
     def __init__(self, log_dir: Path | None = None) -> None:
-        # log_dir override is handy for tests; production path is relative to
-        # cwd so it lands next to `.claudeorch/` where checkpoints live.
-        self._log_dir: Path = log_dir or Path(".claudeorch") / "panes"
+        # log_dir override is handy for tests; production default resolves via
+        # paths helper so the PyInstaller build lands logs under %APPDATA%.
+        self._log_dir: Path = log_dir if log_dir is not None else panes_dir()
         self._log_dir.mkdir(parents=True, exist_ok=True)
         # name -> (Popen, log_path, log_fh). log_fh is kept open so we can
         # close it cleanly in kill(); the child writes into it via stdout.

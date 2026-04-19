@@ -12,12 +12,11 @@ import duckdb
 
 from core.error.error_handler import ErrorHandler
 from core.guard.process_guard import ProcessGuard
+from core.paths import claudeorch_dir
 from core.session.checkpoint import Checkpoint, CheckpointManager
 from core.watchdog.agent_watchdog import AgentWatchdog
 
 log = logging.getLogger(__name__)
-
-DEFAULT_RECOVERY_LOG_PATH = Path(".claudeorch/recovery.duckdb")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS recovery_events (
@@ -57,7 +56,9 @@ class RecoveryManager:
         self._error_handler = error_handler
         self._agent_targets: dict[str, str] = dict(agent_targets or {})
         self._log_path = (
-            Path(recovery_log_path) if recovery_log_path is not None else DEFAULT_RECOVERY_LOG_PATH
+            Path(recovery_log_path)
+            if recovery_log_path is not None
+            else claudeorch_dir() / "recovery.duckdb"
         )
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._db_lock = asyncio.Lock()

@@ -9,9 +9,9 @@ from typing import Any
 
 import duckdb
 
-log = logging.getLogger(__name__)
+from core.paths import claudeorch_dir
 
-DEFAULT_DB_PATH = Path(".claudeorch/memory_log.duckdb")
+log = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_events (
@@ -37,7 +37,11 @@ class MemoryManager:
     COMPRESSION_THRESHOLD_BYTES: int = 10 * 1024
 
     def __init__(self, db_path: Path | str | None = None) -> None:
-        self._db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+        self._db_path = (
+            Path(db_path)
+            if db_path is not None
+            else claudeorch_dir() / "memory_log.duckdb"
+        )
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._db_lock = asyncio.Lock()
         self._project_path: Path | None = None
