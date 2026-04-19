@@ -788,13 +788,194 @@ function DiscordFlow() {
   );
 }
 
-function StubPanel({ title, note }: { title: string; note: string }) {
+// iMessage panel — outbound-only, macOS-only. The backend reports
+// ``platform`` on every endpoint so the panel can surface a blocking
+// banner on non-Darwin hosts while still letting the user save a config
+// (intent: prep on Linux, sync the ``.claudeorch/messenger-imessage.json``
+// to a Mac for actual delivery).
+function IMessagePanel() {
+  const { configureIMessage, testIMessage, getIMessageStatus } = useChannels();
+
+  const [contact, setContact] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
+  // `unknown` until the first status fetch completes — avoids flashing
+  // the "only works on macOS" banner on a Mac before we've probed.
+  const [platform, setPlatform] = useState<string>("unknown");
+  const [savedContact, setSavedContact] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const s = await getIMessageStatus();
+      if (cancelled) return;
+      setPlatform(s.platform);
+      setSavedContact(s.contact);
+      if (s.contact && !contact) setContact(s.contact);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [getIMessageStatus]);
+
+  const isMac = platform === "darwin";
+  const canSave = contact.trim().length > 0 && !saving;
+  // Test is only meaningful if (a) we have a saved config and (b) the
+  // current platform supports sending. A saved config on Linux is
+  // preserved for later sync, but hitting Test there is guaranteed to
+  // fail and would just confuse the operator.
+  const canTest = savedContact !== null && isMac && !testing;
+
+  async function onSave() {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    setTestResult(null);
+    try {
+      await configureIMessage({ contact: contact.trim() });
+      setSavedContact(contact.trim());
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onTest() {
+    if (testing) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testIMessage();
+      if (result.ok) {
+        setTestResult({
+          kind: "success",
+          message: "Delivered — check your iPhone/Mac Messages app",
+        });
+      } else {
+        setTestResult({
+          kind: "error",
+          message: result.error ?? "Test failed",
+        });
+      }
+    } finally {
+      setTesting(false);
+    }
+  }
+
   return (
-    <StepCard title={title} desc={note}>
-      <p className="text-[12.5px]" style={{ color: "var(--text-muted)" }}>
-        Раздел доступен в общих «Настройки → Мессенджеры» — эта вкладка
-        зарезервирована под будущий мастер.
-      </p>
+    <StepCard
+      title="iMessage"
+      desc="Outbound notifications via macOS Messages.app. Groft отправит iMessage на указанный контакт (телефон или email, привязанный к Apple ID)."
+    >
+      {!isMac && platform !== "unknown" && (
+        <div
+          className="mb-[var(--pad-3)] px-3 py-2 rounded-md text-[12px]"
+          style={{
+            background: "var(--tint-danger, var(--bg-secondary))",
+            border: "1px solid var(--status-stuck)",
+            color: "var(--status-stuck)",
+          }}
+        >
+          iMessage only works on macOS (detected platform:{" "}
+          <code>{platform}</code>). You can still save a config — sending
+          is disabled until this app runs on a Mac.
+        </div>
+      )}
+
+      <label className="block mb-[var(--pad-3)]">
+        <span
+          className="text-[11px] uppercase tracking-[0.16em] font-semibold"
+          style={{ color: "var(--text-muted)" }}
+        >
+          Contact
+        </span>
+        <input
+          type="text"
+          autoComplete="off"
+          value={contact}
+          onChange={(e) => setContact(e.target.value)}
+          placeholder="email@example.com or +1..."
+          className="mt-1.5 w-full px-3 py-2 rounded-md text-[13px] font-mono focus:outline-none"
+          style={{
+            background: "var(--bg-secondary)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+          }}
+        />
+        <span
+          className="block mt-1.5 text-[11.5px]"
+          style={{ color: "var(--text-muted)" }}
+        >
+          iMessage принимает как номер телефона (с кодом страны), так и
+          email, привязанный к Apple ID получателя.
+        </span>
+      </label>
+
+      <div className="mt-[var(--pad-4)] flex items-center gap-2">
+        <button
+          onClick={onSave}
+          disabled={!canSave}
+          className="btn btn-primary text-[12.5px]"
+          style={{
+            opacity: canSave ? 1 : 0.5,
+            cursor: canSave ? "pointer" : "not-allowed",
+          }}
+        >
+          {saving ? "Сохраняем…" : "Save"}
+        </button>
+        <button
+          onClick={onTest}
+          disabled={!canTest}
+          className="btn btn-ghost text-[12.5px]"
+          style={{
+            opacity: canTest ? 1 : 0.5,
+            cursor: canTest ? "pointer" : "not-allowed",
+          }}
+          title={
+            !isMac
+              ? "Requires macOS"
+              : savedContact === null
+                ? "Сначала сохрани конфигурацию"
+                : "Отправить пробное iMessage"
+          }
+        >
+          {testing ? "Отправляем…" : "Test"}
+        </button>
+        {savedContact !== null && (
+          <span
+            className="text-[11.5px] ml-2"
+            style={{ color: "var(--text-muted)" }}
+          >
+            <StatusDot status={isMac ? "connected" : "error"} />
+            {isMac ? "Настроено" : "Сохранено (неактивно)"}
+          </span>
+        )}
+      </div>
+
+      {saveError && <ErrorBanner message={saveError} />}
+
+      {testResult && testResult.kind === "success" && (
+        <div
+          className="mt-[var(--pad-3)] px-3 py-2 rounded-md text-[12px]"
+          style={{
+            background: "var(--tint-success, var(--bg-secondary))",
+            border: "1px solid var(--status-active)",
+            color: "var(--status-active)",
+          }}
+        >
+          ✓ {testResult.message}
+        </div>
+      )}
+      {testResult && testResult.kind === "error" && (
+        <ErrorBanner message={testResult.message} />
+      )}
     </StepCard>
   );
 }
@@ -1084,12 +1265,7 @@ export function MessengerSettingsView() {
 
         {tab === "telegram" && <TelegramFlow />}
         {tab === "discord" && <DiscordFlow />}
-        {tab === "imessage" && (
-          <StubPanel
-            title="iMessage"
-            note="Скоро — требуется локальный macOS-bridge."
-          />
-        )}
+        {tab === "imessage" && <IMessagePanel />}
         {tab === "webhook" && <WebhookPanel />}
       </div>
     </div>
