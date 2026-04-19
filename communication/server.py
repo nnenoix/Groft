@@ -85,6 +85,7 @@ class CommunicationServer:
         # ProcessGuard.request_shutdown so the Tauri window close path hits
         # the same teardown as SIGTERM.
         self._shutdown_callback: Callable[[], Awaitable[None]] | None = None
+        self._usage_task: asyncio.Task[None] | None = None
         self._started = False
 
     async def start(self) -> None:
@@ -124,9 +125,17 @@ class CommunicationServer:
                 break
             await asyncio.sleep(0.05)
         self._started = True
+        self._usage_task = asyncio.create_task(self._usage_broadcast_loop())
 
     async def stop(self) -> None:
         # per-step swallow so one failure doesn't leak other resources
+        if self._usage_task is not None:
+            self._usage_task.cancel()
+            try:
+                await self._usage_task
+            except asyncio.CancelledError:
+                pass
+            self._usage_task = None
         if self._ws_server is not None:
             try:
                 self._ws_server.close()
@@ -227,6 +236,13 @@ class CommunicationServer:
                 task.add_done_callback(self._background_tasks.discard)
             return {"ok": True}
 
+        @app.get("/usage")
+        async def usage() -> dict[str, Any]:
+            from core.usage_tracker import UsageTracker
+            tracker = UsageTracker()
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, tracker.compute)
+
         @app.get("/tasks")
         async def tasks_snapshot() -> dict[str, Any]:
             if self._tasks_dir is None:
@@ -244,6 +260,18 @@ class CommunicationServer:
             }
 
         return app
+
+    async def _usage_broadcast_loop(self) -> None:
+        from core.usage_tracker import UsageTracker
+        tracker = UsageTracker()
+        while True:
+            await asyncio.sleep(60)
+            try:
+                loop = asyncio.get_running_loop()
+                windows = await loop.run_in_executor(None, tracker.compute)
+                await self._forward_to_ui({"type": "usage", "windows": windows})
+            except Exception:
+                log.warning("usage broadcast failed", exc_info=True)
 
     async def _handle_connection(self, ws: WebSocketServerProtocol) -> None:
         agent_name: str | None = None
