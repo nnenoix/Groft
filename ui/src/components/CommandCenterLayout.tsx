@@ -2,6 +2,7 @@ import React from "react";
 import { Avatar, EyebrowLabel, StatusDot } from "./primitives";
 import { Icon } from "./icons";
 import { SidebarPulse } from "./SidebarPulse";
+import { SidebarUsage } from "./SidebarUsage";
 import { ComposerDock } from "./ComposerDock";
 import { ComposerModal } from "./ComposerModal";
 import { AgentDrawer } from "./AgentDrawer";
@@ -11,7 +12,7 @@ import { TasksView } from "../views/TasksView";
 import { TerminalsView } from "../views/TerminalsView";
 import { SettingsView, type UISettings } from "../views/SettingsView";
 import { MessengerSettingsView } from "../views/MessengerSettingsView";
-import { useAgents, useLogs, useTasks } from "../store/agentStore";
+import { useAgents, useLogs, useTasks, useUsage } from "../store/agentStore";
 
 export type NavView =
   | "agents"
@@ -62,6 +63,7 @@ export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenter
   const agents = useAgents();
   const tasks = useTasks();
   const logs = useLogs();
+  const usage = useUsage();
 
   const { view, focusAgent, selectedAgent, composerOpen, gridMode, uiSettings } = state;
   const selectedAgentData = selectedAgent
@@ -156,6 +158,14 @@ export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenter
           style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}
         >
           <SidebarPulse agents={agents} />
+        </div>
+
+        {/* Usage block */}
+        <div
+          className="mt-[var(--pad-3)] mx-[var(--pad-3)] px-[var(--pad-3)] py-[var(--pad-3)] rounded-[var(--radius-md)]"
+          style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}
+        >
+          <SidebarUsage rolling5h={usage.rolling_5h} weekly={usage.weekly} />
         </div>
 
         {/* Agent roster */}
