@@ -418,6 +418,376 @@ function TelegramFlow() {
   );
 }
 
+// Discord flow mirrors Telegram's — token → pairing code → poll status —
+// with two deliberate differences:
+//   1. The server-side `/configure` is format-only (discord.py cannot cheaply
+//      probe a token without opening a gateway), so a 200 just means the
+//      token shape is valid.
+//   2. Discord requires the operator to invite the bot to a server before
+//      slash commands are usable. We render the OAuth2 URL pattern and ask
+//      the operator to paste their Application (client) ID — the full OAuth2
+//      invite flow needs a client secret that Groft never sees.
+function DiscordFlow() {
+  const {
+    configureDiscord,
+    startDiscordPairing,
+    getDiscordStatus,
+    status: hookStatus,
+    errorMessage,
+  } = useChannels();
+
+  const [step, setStep] = useState<TelegramStep>(1);
+  const [token, setToken] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [submitting, setSubmitting] = useState<"token" | null>(null);
+  const [probed, setProbed] = useState(false);
+  const [localCode, setLocalCode] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [pairingError, setPairingError] = useState<string | null>(null);
+  const [botUser, setBotUser] = useState<string | null>(null);
+  const [pairedUserId, setPairedUserId] = useState<number | null>(null);
+  const [discordStatus, setDiscordStatus] = useState<ChannelStatus>(
+    "not-connected",
+  );
+  const pollRef = useRef(false);
+
+  // Hydrate from backend on mount. We maintain local state rather than
+  // leaning on useChannels' global status because a user may be configuring
+  // multiple messengers simultaneously in separate tabs.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const s = await getDiscordStatus();
+      if (cancelled) return;
+      setDiscordStatus(s.status);
+      setBotUser(s.botUser);
+      setPairedUserId(s.pairedUserId);
+      if (s.status === "connected") setStep(3);
+      else if (s.status === "connecting") setStep(2);
+      setProbed(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [getDiscordStatus]);
+
+  // Poll /status while in step 2 (waiting for /pair from the bot channel).
+  // Same 2s cadence + 2-minute deadline as Telegram's loop.
+  useEffect(() => {
+    if (step !== 2) return;
+    if (pollRef.current) return;
+    pollRef.current = true;
+    let cancelled = false;
+    (async () => {
+      const deadline = Date.now() + 120_000;
+      try {
+        while (!cancelled && Date.now() < deadline) {
+          try {
+            const s = await getDiscordStatus();
+            setDiscordStatus(s.status);
+            setBotUser(s.botUser);
+            setPairedUserId(s.pairedUserId);
+            if (s.status === "connected") {
+              setStep(3);
+              return;
+            }
+          } catch {
+            // transient; keep polling
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+        if (!cancelled) {
+          setPairingError(
+            "Pairing timed out — operator didn't /pair within 2 minutes",
+          );
+        }
+      } finally {
+        pollRef.current = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [step, getDiscordStatus]);
+
+  const tokenTrimmed = token.trim();
+  // Discord bot tokens: <id>.<ts>.<hmac>. We accept length as a cheap
+  // client-side sanity — the server does the authoritative regex match.
+  const tokenValid = tokenTrimmed.length >= 20 && !/\s/.test(tokenTrimmed);
+
+  async function onSubmitToken() {
+    if (!tokenValid || submitting) return;
+    setSubmitting("token");
+    setPairingError(null);
+    try {
+      await configureDiscord(tokenTrimmed);
+      try {
+        const issued = await startDiscordPairing();
+        setLocalCode(issued);
+        setStep(2);
+      } catch (e) {
+        setPairingError(
+          e instanceof Error ? e.message : "Failed to issue pairing code",
+        );
+      }
+    } finally {
+      setSubmitting(null);
+    }
+  }
+
+  async function onCopyCode() {
+    if (!localCode) return;
+    try {
+      await navigator.clipboard.writeText(localCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      /* clipboard unavailable — silent */
+    }
+  }
+
+  const bannerError =
+    pairingError ?? (hookStatus === "error" ? errorMessage : null);
+
+  // OAuth2 invite URL template. scope=bot+applications.commands gives the
+  // bot the slash-command surface and the ability to appear in channel
+  // member lists. We can't run the full OAuth2 code-grant flow (requires
+  // a client secret), so the operator handles the invite step manually.
+  const inviteUrl = clientId.trim()
+    ? `https://discord.com/api/oauth2/authorize?client_id=${encodeURIComponent(
+        clientId.trim(),
+      )}&scope=bot+applications.commands`
+    : null;
+
+  if (!probed) {
+    return (
+      <div
+        className="text-[12px] p-[var(--pad-4)]"
+        style={{ color: "var(--text-muted)" }}
+      >
+        Проверяем статус…
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <Crumbs step={step} />
+
+      {step === 1 && (
+        <StepCard
+          title="Шаг 1 — Bot Token + приглашение в сервер"
+          desc="Создай приложение на Discord Developer Portal, получи bot token и пригласи бота в свой сервер. Client ID используется только для ссылки приглашения — Groft его не сохраняет."
+        >
+          <label className="block mb-[var(--pad-3)]">
+            <span
+              className="text-[11px] uppercase tracking-[0.16em] font-semibold"
+              style={{ color: "var(--text-muted)" }}
+            >
+              Application (Client) ID
+            </span>
+            <input
+              type="text"
+              autoComplete="off"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="123456789012345678"
+              className="mt-1.5 w-full px-3 py-2 rounded-md text-[13px] font-mono focus:outline-none"
+              style={{
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border)",
+                color: "var(--text-primary)",
+              }}
+            />
+            <span
+              className="block mt-1.5 text-[11.5px]"
+              style={{ color: "var(--text-muted)" }}
+            >
+              Только для генерации ссылки приглашения. Groft не требует и не хранит client secret.
+            </span>
+          </label>
+
+          {inviteUrl && (
+            <div
+              className="mb-[var(--pad-3)] px-3 py-2 rounded-md text-[12px]"
+              style={{
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border)",
+              }}
+            >
+              <div
+                className="text-[11px] uppercase tracking-[0.16em] font-semibold mb-1"
+                style={{ color: "var(--text-muted)" }}
+              >
+                Invite link
+              </div>
+              <a
+                href={inviteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-[12px] break-all"
+                style={{ color: "var(--accent-hover)" }}
+              >
+                {inviteUrl}
+              </a>
+              <div
+                className="mt-1 text-[11.5px]"
+                style={{ color: "var(--text-muted)" }}
+              >
+                Открой ссылку, выбери сервер и подтверди. Бот появится в списке участников — только после этого пригодится слэш-команда /pair.
+              </div>
+            </div>
+          )}
+
+          <label className="block">
+            <span
+              className="text-[11px] uppercase tracking-[0.16em] font-semibold"
+              style={{ color: "var(--text-muted)" }}
+            >
+              Bot Token
+            </span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="MTIzNDU2Nzg5MDEyMzQ1Njc4OQ.GabcDE.abcdefghijkl..."
+              className="mt-1.5 w-full px-3 py-2 rounded-md text-[13px] font-mono focus:outline-none"
+              style={{
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border)",
+                color: "var(--text-primary)",
+              }}
+            />
+            <span
+              className="block mt-1.5 text-[11.5px]"
+              style={{ color: "var(--text-muted)" }}
+            >
+              Формат: три base64url-сегмента через точку. Проверка формата на бэке; live-probe возможен только после коннекта к gateway.
+            </span>
+          </label>
+
+          <div className="mt-[var(--pad-4)] flex items-center gap-2">
+            <button
+              onClick={onSubmitToken}
+              disabled={!tokenValid || submitting !== null}
+              className="btn btn-primary text-[12.5px]"
+              style={{
+                opacity: !tokenValid || submitting !== null ? 0.5 : 1,
+                cursor:
+                  !tokenValid || submitting !== null
+                    ? "not-allowed"
+                    : "pointer",
+              }}
+            >
+              {submitting === "token" ? "Подключаем…" : "Подключить"}
+            </button>
+            {!tokenValid && token.length > 0 && (
+              <span
+                className="text-[11.5px]"
+                style={{ color: "var(--status-stuck)" }}
+              >
+                Слишком короткий токен
+              </span>
+            )}
+          </div>
+          {bannerError && <ErrorBanner message={bannerError} />}
+        </StepCard>
+      )}
+
+      {step === 2 && (
+        <StepCard
+          title="Шаг 2 — Парный код"
+          desc="В сервере, куда ты пригласил бота, отправь слэш-команду /pair <код>. Появится не сразу: глобальная sync до нескольких минут."
+        >
+          <div
+            className="rounded-[var(--radius-md)] px-[var(--pad-4)] py-[var(--pad-5)] flex items-center justify-between gap-[var(--pad-4)]"
+            style={{
+              background: "var(--accent-light)",
+              border: "1px solid var(--accent-primary)",
+            }}
+          >
+            <div
+              className="font-mono tracking-[0.28em] text-[26px] font-semibold select-all"
+              style={{ color: "var(--accent-hover)" }}
+            >
+              {localCode ?? "—"}
+            </div>
+            <button
+              onClick={onCopyCode}
+              disabled={!localCode}
+              className="btn btn-ghost text-[12.5px]"
+              style={{
+                opacity: localCode ? 1 : 0.5,
+                cursor: localCode ? "pointer" : "not-allowed",
+              }}
+            >
+              {copied ? "Скопировано" : "Скопировать"}
+            </button>
+          </div>
+          <div
+            className="mt-[var(--pad-4)] text-[12.5px]"
+            style={{ color: "var(--text-muted)" }}
+          >
+            В Discord отправь:{" "}
+            <code>/pair code:{localCode ?? "<код>"}</code>
+          </div>
+          <div className="mt-[var(--pad-4)] flex items-center gap-2">
+            <div
+              className="text-[12.5px] flex items-center gap-2"
+              style={{ color: "var(--text-muted)" }}
+            >
+              <span
+                className="inline-block w-3 h-3 rounded-full animate-pulse"
+                style={{ background: "var(--accent-primary)" }}
+              />
+              Ждём подтверждения из Discord…
+            </div>
+          </div>
+          <div className="mt-[var(--pad-4)] flex items-center gap-2">
+            <button
+              onClick={() => setStep(1)}
+              className="btn btn-ghost text-[12.5px]"
+            >
+              Назад
+            </button>
+          </div>
+          {bannerError && <ErrorBanner message={bannerError} />}
+        </StepCard>
+      )}
+
+      {step === 3 && (
+        <StepCard title="Шаг 3 — Готово">
+          {discordStatus === "error" ? (
+            <div
+              className="text-[13px]"
+              style={{ color: "var(--status-stuck)" }}
+            >
+              <StatusDot status="error" />
+              Ошибка — {errorMessage ?? "канал недоступен"}
+            </div>
+          ) : (
+            <>
+              <div className="text-[13px]">
+                <StatusDot status="connected" />
+                {botUser ? `Подключён как бот ${botUser}` : "Подключён"}
+              </div>
+              {pairedUserId !== null && (
+                <div
+                  className="text-[12.5px] mt-1"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  Спарен с Discord user id {pairedUserId}
+                </div>
+              )}
+            </>
+          )}
+        </StepCard>
+      )}
+    </>
+  );
+}
+
 function StubPanel({ title, note }: { title: string; note: string }) {
   return (
     <StepCard title={title} desc={note}>
@@ -713,12 +1083,7 @@ export function MessengerSettingsView() {
         </div>
 
         {tab === "telegram" && <TelegramFlow />}
-        {tab === "discord" && (
-          <StubPanel
-            title="Discord"
-            note="Уже доступен в старых «Настройках» — перенос в мастер запланирован."
-          />
-        )}
+        {tab === "discord" && <DiscordFlow />}
         {tab === "imessage" && (
           <StubPanel
             title="iMessage"

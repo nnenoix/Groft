@@ -138,6 +138,58 @@ async def _maybe_start_telegram_bridge(
     return bridge
 
 
+async def _maybe_start_discord_bridge(
+    orchestrator: Orchestrator,
+    backend: Any,
+) -> Any | None:
+    """Construct + start a DiscordBridge if on-disk config is present.
+
+    Mirrors ``_maybe_start_telegram_bridge`` — returns the live bridge
+    on success, or None when no config exists, the token is malformed,
+    discord.py isn't installed, or bridge startup fails. All failure
+    modes log but never propagate.
+    """
+    state_path = claudeorch_dir() / "messenger-discord.json"
+    try:
+        from core.messengers.discord import (
+            DiscordBridge,
+            is_valid_token_format,
+            read_state_file,
+        )
+    except Exception:
+        log.warning("discord bridge module unavailable", exc_info=True)
+        return None
+    state = read_state_file(state_path)
+    token = state.get("token")
+    if not isinstance(token, str) or not is_valid_token_format(token):
+        return None
+    allowlist: set[int] = set()
+    paired = state.get("paired_user_id")
+    if isinstance(paired, int):
+        allowlist.add(paired)
+    try:
+        bridge = DiscordBridge(
+            token,
+            orchestrator,
+            allowlist=allowlist,
+            backend=backend,
+            state_path=state_path,
+        )
+    except ValueError:
+        log.warning("discord bridge rejected on-disk token as malformed")
+        return None
+    except Exception:
+        log.exception("discord bridge construction failed")
+        return None
+    try:
+        await bridge.start()
+    except Exception:
+        log.exception("discord bridge start failed")
+        return None
+    log.info("discord bridge started (paired=%s)", paired)
+    return bridge
+
+
 async def main() -> None:
     project_root = user_data_root()
     configure_logging(log_dir=logs_dir())
@@ -167,6 +219,11 @@ async def main() -> None:
     # A missing python-telegram-bot dep degrades to a warning — the rest of
     # the orchestrator runs unchanged.
     telegram_bridge = await _maybe_start_telegram_bridge(orchestrator, backend)
+
+    # Optional Discord bridge — same lazy opt-in as Telegram: boots only if
+    # the operator has completed configure-then-pair via the UI. A missing
+    # discord.py dep degrades to a warning; the orchestrator keeps going.
+    discord_bridge = await _maybe_start_discord_bridge(orchestrator, backend)
 
     comm_server = CommunicationServer(
         backend=backend,
@@ -533,6 +590,11 @@ async def main() -> None:
             await telegram_bridge.stop()
         except Exception:
             log.exception("teardown step failed: telegram_bridge.stop")
+    if discord_bridge is not None:
+        try:
+            await discord_bridge.stop()
+        except Exception:
+            log.exception("teardown step failed: discord_bridge.stop")
     try:
         await spawner.despawn_all()
     except Exception:
