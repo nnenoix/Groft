@@ -76,6 +76,22 @@
 - `.github/workflows/release.yml`: триггер `push: tags: ["v*"]` + `workflow_dispatch`. `permissions: contents: write`. Все `uses:` пиннутые (`@v4`/`@v5`/`@v2`).
 - Baseline тестов: 13 passed, 4 skipped.
 
+## core/usage_tracker.py
+
+- `UsageTracker(projects_dir: Path | None)` — sync `compute()` reads `**/*.jsonl` under projects_dir.
+- Aggregates into `rolling_5h` (now - 5h) and `weekly` (now - 7d) windows.
+- Returns `{"rolling_5h": {..., "reset_at": str}, "weekly": {..., "reset_at": str}}`.
+- `reset_at` = oldest message timestamp + window duration; fallback = `now.isoformat()` when window empty.
+- Skips unreadable files (log.warning), skips malformed JSON lines, skips missing keys. No raises.
+- projects_dir non-existent → zeros returned immediately.
+
+## communication/server.py — usage tracking additions
+
+- `_usage_task: asyncio.Task[None] | None` in `__init__`.
+- `/usage` GET endpoint: runs `UsageTracker().compute()` in executor, returns dict.
+- `_usage_broadcast_loop`: asyncio.sleep(60) loop, calls `_forward_to_ui({"type": "usage", "windows": ...})`.
+- Task created in `start()` after `_started = True`; cancelled+awaited in `stop()` before WS shutdown.
+
 ## Зависимости
 
 - `beautifulsoup4>=4.12` в `requirements.txt`.
