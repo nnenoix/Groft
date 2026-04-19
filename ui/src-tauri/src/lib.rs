@@ -1,5 +1,7 @@
 mod agent_fs;
+mod cli_detect;
 mod messenger;
+mod setup_runner;
 
 use std::path::Path;
 use std::process::Child;
@@ -218,14 +220,18 @@ pub fn run() {
                 graceful_shutdown(window.app_handle().clone());
             }
         })
+        .manage(setup_runner::SetupProcesses::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             agent_fs::write_agent_file,
             agent_fs::read_agent_files,
             agent_fs::delete_agent_file,
+            cli_detect::detect_claude_cli,
             messenger::save_messenger_config,
             messenger::get_messenger_status,
             messenger::run_tmux_command,
+            setup_runner::run_setup_step,
+            setup_runner::cancel_setup_step,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

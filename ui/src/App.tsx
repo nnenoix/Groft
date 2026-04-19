@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   CommandCenterLayout,
   INITIAL_CMD_STATE,
@@ -6,6 +7,7 @@ import {
 } from "./components/CommandCenterLayout";
 import { CmdK } from "./components/CmdK";
 import { loadUISettings, saveUISettings } from "./hooks/useUISettings";
+import { SetupView, type CliDetectResult } from "./views/SetupView";
 
 function App() {
   const [state, setStateRaw] = useState<CommandCenterState>({
@@ -15,9 +17,30 @@ function App() {
     uiSettings: loadUISettings(),
   });
   const [cmdk, setCmdk] = useState(false);
+  // null = probe in flight. Undefined path is handled by the route below:
+  // while probing we render a splash so the main UI doesn't flash before we
+  // know whether setup is needed.
+  const [cliDetect, setCliDetect] = useState<CliDetectResult | null>(null);
 
   const setState = (patch: Partial<CommandCenterState>) =>
     setStateRaw((prev) => ({ ...prev, ...patch }));
+
+  const probeCli = useCallback(async () => {
+    try {
+      const r = await invoke<CliDetectResult>("detect_claude_cli");
+      setCliDetect(r);
+    } catch (err) {
+      // tauri-api is available in packaged and dev modes alike, but a missing
+      // backend command (e.g. very old bundle) shouldn't brick the UI —
+      // fall through to "installed: true" so the main UI still renders.
+      console.error("detect_claude_cli failed", err);
+      setCliDetect({ installed: true, path: null, version: null });
+    }
+  }, []);
+
+  useEffect(() => {
+    void probeCli();
+  }, [probeCli]);
 
   useEffect(() => {
     const h = document.documentElement;
@@ -84,6 +107,14 @@ function App() {
       if (focusTimer !== null) window.clearTimeout(focusTimer);
     };
   }, []);
+
+  if (cliDetect === null) {
+    return <div className="app-splash">Loading…</div>;
+  }
+
+  if (!cliDetect.installed) {
+    return <SetupView detect={cliDetect} onRecheck={probeCli} />;
+  }
 
   return (
     <>
