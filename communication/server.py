@@ -43,6 +43,56 @@ TELEGRAM_PAIR_CODE_LEN = 6
 # internally so bad input never reaches the Telegram API.
 _TELEGRAM_TOKEN_RE = re.compile(r"^[0-9]+:[A-Za-z0-9_-]+$")
 
+# Discord pairing constants mirror the Telegram ones — same 5-min TTL and
+# 6-char uppercase alnum nonce. Stored in a separate in-memory dict so
+# Telegram and Discord codes never cross-leak across messengers.
+DISCORD_PAIR_TTL = 300.0
+DISCORD_PAIR_CODE_LEN = 6
+_DISCORD_PAIR_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+# Discord bot tokens match the same shape as the UI-side DISCORD_TOKEN_RE
+# and DiscordBridge.TOKEN_RE: three base64url segments separated by dots.
+_DISCORD_TOKEN_RE = re.compile(
+    r"^[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}$"
+)
+
+
+def _generate_discord_pair_code() -> str:
+    """Cryptographically-strong Discord pairing nonce.
+
+    Same 6-char alphabet as the Telegram flow so the operator's muscle
+    memory is identical across channels.
+    """
+    import secrets
+
+    return "".join(
+        secrets.choice(_DISCORD_PAIR_ALPHABET) for _ in range(DISCORD_PAIR_CODE_LEN)
+    )
+
+
+def _discord_state_path() -> Path:
+    """On-disk home for persisted Discord config. Parent is auto-created."""
+    return claudeorch_dir() / "messenger-discord.json"
+
+
+def _read_discord_state() -> dict[str, Any]:
+    """Load persisted Discord state; empty dict on missing/malformed file."""
+    path = _discord_state_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        log.warning("messenger-discord.json unreadable", exc_info=True)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_discord_state(data: dict[str, Any]) -> None:
+    """Persist Discord config. Parent dir via claudeorch_dir."""
+    path = _discord_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
 
 def _monotonic_now() -> float:
     """Default clock source for pairing timestamps. Monotonic so clock skew
@@ -180,6 +230,10 @@ class CommunicationServer:
         self._telegram_pairs: dict[str, float] = {}
         # monkeypatchable clock source so tests can fast-forward without sleeps.
         self._telegram_clock: Callable[[], float] = _monotonic_now
+        # Discord pairing nonces — separate dict so Telegram and Discord
+        # codes never cross-leak. Same TTL + clock indirection pattern.
+        self._discord_pairs: dict[str, float] = {}
+        self._discord_clock: Callable[[], float] = _monotonic_now
         # orchestrator is optional so unit tests (and the shutdown-only path)
         # can construct a server without the full spawner graph. Endpoints
         # that depend on it return 503 when it's None.
@@ -457,6 +511,95 @@ class CommunicationServer:
             return {
                 "status": status,
                 "username": username if isinstance(username, str) else None,
+                "paired_user_id": paired if isinstance(paired, int) else None,
+            }
+
+        @app.post("/messenger/discord/configure")
+        async def discord_configure(request: Request) -> JSONResponse:
+            # Format-only validation: discord.py can't validate a token
+            # without opening a gateway connection (which is too heavy
+            # for a REST probe and would fight the bridge's own
+            # client.start()). We just assert the token shape and persist;
+            # the actual "is this token live?" answer comes from the
+            # bridge boot.
+            try:
+                body = await request.json()
+            except Exception:
+                return JSONResponse(
+                    {"ok": False, "error": "invalid json body"}, status_code=400
+                )
+            if not isinstance(body, dict):
+                return JSONResponse(
+                    {"ok": False, "error": "body must be an object"},
+                    status_code=400,
+                )
+            token = body.get("token")
+            if not isinstance(token, str) or not _DISCORD_TOKEN_RE.match(token):
+                return JSONResponse(
+                    {"ok": False, "error": "invalid token format"},
+                    status_code=400,
+                )
+            # Preserve paired_user_id if the user re-configures after pairing,
+            # same pattern as the Telegram configure flow.
+            loop = asyncio.get_running_loop()
+            existing = await loop.run_in_executor(None, _read_discord_state)
+            persisted: dict[str, Any] = {
+                "token": token,
+                # bot_user is populated by the bridge on ready; configure
+                # can't know it without a gateway connect, so null for now.
+                "bot_user": existing.get("bot_user")
+                if isinstance(existing, dict)
+                and isinstance(existing.get("bot_user"), str)
+                else None,
+            }
+            if isinstance(existing.get("paired_user_id"), int):
+                persisted["paired_user_id"] = existing["paired_user_id"]
+            try:
+                await loop.run_in_executor(
+                    None, _write_discord_state, persisted
+                )
+            except Exception:
+                log.exception("failed to persist discord config")
+                return JSONResponse(
+                    {"ok": False, "error": "persist failed"}, status_code=500
+                )
+            return JSONResponse({"ok": True})
+
+        @app.post("/messenger/discord/start-pairing")
+        async def discord_start_pairing() -> dict[str, str]:
+            # Separate store from Telegram — a Telegram code can't pair
+            # a Discord user and vice versa.
+            code = _generate_discord_pair_code()
+            now = self._discord_clock()
+            ttl = DISCORD_PAIR_TTL
+            expired = [
+                c for c, t in self._discord_pairs.items() if now - t > ttl
+            ]
+            for c in expired:
+                self._discord_pairs.pop(c, None)
+            self._discord_pairs[code] = now
+            return {"code": code}
+
+        @app.get("/messenger/discord/status")
+        async def discord_status() -> dict[str, Any]:
+            loop = asyncio.get_running_loop()
+            state = await loop.run_in_executor(None, _read_discord_state)
+            token = state.get("token") if isinstance(state, dict) else None
+            bot_user = (
+                state.get("bot_user") if isinstance(state, dict) else None
+            )
+            paired = (
+                state.get("paired_user_id") if isinstance(state, dict) else None
+            )
+            # Same tri-state as Telegram: not-connected (no token),
+            # connecting (token but no paired user), connected (both).
+            if isinstance(token, str) and token:
+                status = "connected" if isinstance(paired, int) else "connecting"
+            else:
+                status = "not-connected"
+            return {
+                "status": status,
+                "bot_user": bot_user if isinstance(bot_user, str) else None,
                 "paired_user_id": paired if isinstance(paired, int) else None,
             }
 
