@@ -359,7 +359,12 @@ class CommunicationServer:
             await self._log_message(sender, to, "message", msg)
             # forward to recipient's pane whenever one is known. Workers
             # don't run a WS consumer, so the pane is the actual inbox.
-            if isinstance(content, str):
+            # Exception: opus reads its inbox through the claudeorch-comms MCP
+            # bridge (get_messages), so a pane forward would double the
+            # message in opus's TUI. `_resolve_pane_target` would also fall
+            # back to `lead_target` here, which IS opus's pane — so the
+            # guard has to be explicit, not "only if target is registered".
+            if isinstance(content, str) and to != SNAPSHOT_SINK_AGENT:
                 mode = msg.get("mode")
                 model = msg.get("model")
                 prefix_parts: list[str] = []
