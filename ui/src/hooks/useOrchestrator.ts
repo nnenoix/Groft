@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import useWebSocket, { type WSStatus } from "./useWebSocket";
 import { useDispatch } from "../store/agentStore";
-import type { AgentStatus } from "../store/agentStore";
+import type { AgentStatus, UsageWindow } from "../store/agentStore";
 import type { Task, TaskStatus } from "../store/agentStore";
 import { createLogger } from "../utils/logger";
 
@@ -55,6 +55,29 @@ function isTaskPriority(v: unknown): v is "high" | "med" | "low" {
 
 function isMode(v: unknown): v is "solo" | "team" | "review" {
   return v === "solo" || v === "team" || v === "review";
+}
+
+function asUsageWindow(v: unknown): UsageWindow | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const rec = v as Record<string, unknown>;
+  const inputTokens = rec.input_tokens;
+  const outputTokens = rec.output_tokens;
+  const total = rec.total;
+  const resetAt = rec.reset_at;
+  if (
+    typeof inputTokens !== "number" ||
+    typeof outputTokens !== "number" ||
+    typeof total !== "number" ||
+    typeof resetAt !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    total,
+    resetAt,
+  };
 }
 
 function asTaskArray(v: unknown): Task[] | undefined {
@@ -167,6 +190,25 @@ function useOrchestrator(): UseOrchestratorResult {
         log.exception(err, "roster fetch failed");
       }
     })();
+    (async () => {
+      try {
+        const resp = await fetch(`${REST_URL}/usage`, {
+          signal: ctrl.signal,
+        });
+        if (!resp.ok) {
+          log.warn("usage fetch non-ok", resp.status);
+          return;
+        }
+        const body: unknown = await resp.json();
+        if (!body || typeof body !== "object") return;
+        const rec = body as Record<string, unknown>;
+        const rolling_5h = asUsageWindow(rec.rolling_5h) ?? null;
+        const weekly = asUsageWindow(rec.weekly) ?? null;
+        dispatch({ type: "SET_USAGE_WINDOWS", rolling_5h, weekly });
+      } catch (err) {
+        log.exception(err, "usage fetch failed");
+      }
+    })();
     return () => ctrl.abort();
   }, [status, dispatch]);
 
@@ -260,6 +302,23 @@ function useOrchestrator(): UseOrchestratorResult {
           return;
         }
         dispatch({ type: "UPSERT_TASKS", backlog, current, done });
+        return;
+      }
+      case "usage": {
+        const windows = msg.windows;
+        if (!windows || typeof windows !== "object") return;
+        const rec = windows as Record<string, unknown>;
+        const rolling_5h = asUsageWindow(rec.rolling_5h);
+        const weekly = asUsageWindow(rec.weekly);
+        // Drop the frame entirely if neither window validated — backend is
+        // expected to ship both fields; a malformed payload means the whole
+        // thing is suspect.
+        if (rolling_5h === undefined && weekly === undefined) return;
+        dispatch({
+          type: "SET_USAGE_WINDOWS",
+          rolling_5h: rolling_5h ?? null,
+          weekly: weekly ?? null,
+        });
         return;
       }
       default:
