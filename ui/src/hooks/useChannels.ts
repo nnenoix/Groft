@@ -41,6 +41,26 @@ export interface WebhookTestResult {
   error: string | null;
 }
 
+// iMessage is macOS-only on the bridge side, but we let the user
+// configure on any platform (so a dev on Linux can prep a config for
+// later sync to a Mac). ``platform`` carries ``sys.platform`` verbatim
+// so the UI can render the right banner; ``supported`` is derived.
+export interface IMessageConfig {
+  contact: string;
+}
+
+export interface IMessageStatusSnapshot {
+  status: ChannelStatus | "unsupported";
+  contact: string | null;
+  platform: string;
+}
+
+export interface IMessageTestResult {
+  ok: boolean;
+  platform: string;
+  error: string | null;
+}
+
 export interface UseChannelsResult {
   current: Messenger | null;
   status: ChannelStatus;
@@ -66,6 +86,9 @@ export interface UseChannelsResult {
   configureDiscord: (token: string) => Promise<void>;
   startDiscordPairing: () => Promise<string>;
   getDiscordStatus: () => Promise<DiscordStatusSnapshot>;
+  configureIMessage: (cfg: IMessageConfig) => Promise<void>;
+  testIMessage: () => Promise<IMessageTestResult>;
+  getIMessageStatus: () => Promise<IMessageStatusSnapshot>;
 }
 
 function toChannelStatus(raw: string): ChannelStatus {
@@ -463,6 +486,90 @@ function useChannels(): UseChannelsResult {
     return body.code;
   }, []);
 
+  // iMessage — outbound-only, macOS-only. We let the user configure on
+  // any platform (see the hook types above), but the backend's /status
+  // reports "unsupported" off-Mac so the panel can render a blocking
+  // banner. No pairing step — the recipient is just a buddy identifier.
+  const configureIMessage = useCallback(
+    async (cfg: IMessageConfig): Promise<void> => {
+      setErrorMessage(null);
+      const resp = await fetch(
+        "http://localhost:8766/messenger/imessage/configure",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contact: cfg.contact }),
+        },
+      );
+      let body: { ok?: boolean; error?: string };
+      try {
+        body = await resp.json();
+      } catch {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      if (!resp.ok || !body.ok) {
+        const msg = body.error || `HTTP ${resp.status}`;
+        setErrorMessage(msg);
+        throw new Error(msg);
+      }
+    },
+    [],
+  );
+
+  const testIMessage = useCallback(async (): Promise<IMessageTestResult> => {
+    const resp = await fetch("http://localhost:8766/messenger/imessage/test", {
+      method: "POST",
+    });
+    let body: IMessageTestResult;
+    try {
+      body = (await resp.json()) as IMessageTestResult;
+    } catch {
+      return {
+        ok: false,
+        platform: "unknown",
+        error: `HTTP ${resp.status}`,
+      };
+    }
+    // Backend returns ok=false with 200 on delivery failure (shape-match
+    // with webhook/test). 400 only happens when config is missing —
+    // surface whatever error string the backend provided.
+    return body;
+  }, []);
+
+  const getIMessageStatus =
+    useCallback(async (): Promise<IMessageStatusSnapshot> => {
+      const empty: IMessageStatusSnapshot = {
+        status: "not-connected",
+        contact: null,
+        platform: "unknown",
+      };
+      try {
+        const resp = await fetch(
+          "http://localhost:8766/messenger/imessage/status",
+        );
+        if (!resp.ok) return empty;
+        const body = (await resp.json()) as {
+          status?: string;
+          contact?: string | null;
+          platform?: string;
+        };
+        // Accept "unsupported" in addition to the normal ChannelStatus
+        // values — it's an iMessage-specific state for non-Mac hosts.
+        const raw = body.status ?? "";
+        const mapped: IMessageStatusSnapshot["status"] =
+          raw === "unsupported" ? "unsupported" : toChannelStatus(raw);
+        return {
+          status: mapped,
+          contact: typeof body.contact === "string" ? body.contact : null,
+          platform:
+            typeof body.platform === "string" ? body.platform : "unknown",
+        };
+      } catch (err) {
+        log.info("imessage status unavailable", err);
+        return empty;
+      }
+    }, []);
+
   const getDiscordStatus =
     useCallback(async (): Promise<DiscordStatusSnapshot> => {
       const empty: DiscordStatusSnapshot = {
@@ -525,6 +632,9 @@ function useChannels(): UseChannelsResult {
     configureDiscord,
     startDiscordPairing,
     getDiscordStatus,
+    configureIMessage,
+    testIMessage,
+    getIMessageStatus,
   };
 }
 
