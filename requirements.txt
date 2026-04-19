@@ -8,3 +8,4 @@ httpx
 mcp
 beautifulsoup4>=4.12
 watchfiles
+python-telegram-bot>=21
