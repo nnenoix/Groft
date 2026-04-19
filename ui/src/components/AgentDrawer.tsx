@@ -128,6 +128,15 @@ export function AgentDrawer({ agent, onClose, onOpenTerminal }: AgentDrawerProps
   const [autoRestart, setAutoRestart] = useState(true);
   const [pauseOnDone, setPauseOnDone] = useState(false);
 
+  // Vision "See pane" inline prompt state. Collapsed by default so the
+  // button doesn't eat vertical space on every drawer open; expands on
+  // click, reveals input + submit, then folds the answer underneath.
+  const [visionOpen, setVisionOpen] = useState(false);
+  const [visionQuestion, setVisionQuestion] = useState("");
+  const [visionAnswer, setVisionAnswer] = useState<string | null>(null);
+  const [visionError, setVisionError] = useState<string | null>(null);
+  const [visionLoading, setVisionLoading] = useState(false);
+
   useEffect(() => {
     if (agent) {
       setMounted(false);
@@ -144,8 +153,43 @@ export function AgentDrawer({ agent, onClose, onOpenTerminal }: AgentDrawerProps
       setStuckThreshold(3);
       setAutoRestart(true);
       setPauseOnDone(false);
+      // Reset vision panel across agent switches — a question asked about
+      // backend-dev's pane is meaningless once the drawer flips to frontend-dev.
+      setVisionOpen(false);
+      setVisionQuestion("");
+      setVisionAnswer(null);
+      setVisionError(null);
+      setVisionLoading(false);
     }
   }, [agent?.name]);
+
+  async function submitVision() {
+    if (!agent) return;
+    const q = visionQuestion.trim();
+    if (!q) return;
+    setVisionLoading(true);
+    setVisionError(null);
+    setVisionAnswer(null);
+    try {
+      const resp = await fetch("http://localhost:8766/vision/see-pane", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent: agent.name, question: q }),
+      });
+      const data = (await resp.json()) as { answer?: string; error?: string };
+      if (!resp.ok) {
+        setVisionError(data.error ?? `HTTP ${resp.status}`);
+      } else if (typeof data.answer === "string") {
+        setVisionAnswer(data.answer);
+      } else {
+        setVisionError("Empty response");
+      }
+    } catch (err) {
+      setVisionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setVisionLoading(false);
+    }
+  }
 
   if (!agent) return null;
 
@@ -220,6 +264,77 @@ export function AgentDrawer({ agent, onClose, onOpenTerminal }: AgentDrawerProps
               <button onClick={() => onOpenTerminal(agent.name)} className="btn btn-primary w-full !justify-center">
                 <Icon.Terminal size={13} /> Открыть терминал
               </button>
+
+              {/*
+                Vision "See pane" — cheap text-only Claude lookup over the
+                agent's captured tmux pane. Collapsed by default to keep the
+                drawer tidy; expands on click. Uses POST /vision/see-pane
+                (see communication/server.py) which in turn wraps
+                core.vision.ask_about_text. The answer is folded inline so
+                the operator doesn't have to leave the drawer.
+              */}
+              <button
+                onClick={() => setVisionOpen((v) => !v)}
+                className="btn btn-outline w-full !justify-center"
+              >
+                See pane {visionOpen ? "▲" : "▼"}
+              </button>
+              {visionOpen && (
+                <div
+                  className="card-flat p-3 space-y-2"
+                  style={{ border: "1px solid var(--border)" }}
+                >
+                  <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    Ask a question about this agent's pane
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={visionQuestion}
+                    onChange={(e) => setVisionQuestion(e.target.value)}
+                    placeholder="e.g. What tool did this agent just call?"
+                    className="w-full px-2 py-1.5 rounded-md text-[12px] font-mono focus:outline-none"
+                    style={{
+                      background: "var(--bg-secondary)",
+                      border: "1px solid var(--border)",
+                      color: "var(--text-primary)",
+                      resize: "vertical",
+                    }}
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      onClick={submitVision}
+                      disabled={visionLoading || !visionQuestion.trim()}
+                      className="btn btn-primary text-[12px]"
+                    >
+                      {visionLoading ? "Asking..." : "Ask"}
+                    </button>
+                  </div>
+                  {visionError && (
+                    <div
+                      className="text-[12px] font-mono p-2 rounded-md"
+                      style={{
+                        background: "var(--bg-secondary)",
+                        color: "var(--status-stuck)",
+                        border: "1px solid var(--status-stuck)",
+                      }}
+                    >
+                      {visionError}
+                    </div>
+                  )}
+                  {visionAnswer && (
+                    <div
+                      className="text-[12px] p-2 rounded-md whitespace-pre-wrap"
+                      style={{
+                        background: "var(--bg-secondary)",
+                        color: "var(--text-primary)",
+                        border: "1px solid var(--border)",
+                      }}
+                    >
+                      {visionAnswer}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
