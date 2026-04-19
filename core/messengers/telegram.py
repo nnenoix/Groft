@@ -39,6 +39,31 @@ def is_valid_token_format(token: str) -> bool:
     return bool(TOKEN_RE.match(token or ""))
 
 
+def read_state_file(path: Path) -> dict[str, Any]:
+    """Load persisted Telegram state from ``path``; empty dict on any error.
+
+    Shared between the bridge (for paired_user_id persistence) and the main
+    process boot hook (to decide whether to construct a bridge at all).
+    Kept best-effort because the file is regenerable by re-running the
+    configure flow.
+    """
+    try:
+        if not path.exists():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        log.warning("telegram state unreadable path=%s", path, exc_info=True)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_paired_user_id(path: Path) -> int | None:
+    """Extract ``paired_user_id`` from the state file, or None if unset."""
+    data = read_state_file(path)
+    value = data.get("paired_user_id")
+    return value if isinstance(value, int) else None
+
+
 class TelegramBridge:
     """Long-polling Telegram bridge that maps ``/ask`` to a live agent.
 
@@ -198,11 +223,7 @@ class TelegramBridge:
             return
         path = self._state_path
         try:
-            data: dict[str, Any] = {}
-            if path.exists():
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(data, dict):
-                    data = {}
+            data = read_state_file(path)
             data["paired_user_id"] = user_id
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(data, indent=2), encoding="utf-8")
