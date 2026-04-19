@@ -12,18 +12,27 @@ export type ChannelStatus =
   | "connected"
   | "error";
 
+export interface TelegramStatusSnapshot {
+  status: ChannelStatus;
+  username: string | null;
+  pairedUserId: number | null;
+}
+
 export interface UseChannelsResult {
   current: Messenger | null;
   status: ChannelStatus;
   errorMessage: string | null;
   username: string | null;
+  pairedUserId: number | null;
+  pairingCode: string | null;
   connect: (m: Messenger, config: Record<string, string>) => Promise<void>;
   pair: (code: string) => Promise<void>;
   disconnect: () => Promise<void>;
   testWebhook: (cfg: { url: string; secret: string }) => Promise<boolean>;
   configureTelegram: (token: string) => Promise<void>;
   pairTelegram: (code: string) => Promise<void>;
-  getTelegramStatus: () => Promise<ChannelStatus>;
+  getTelegramStatus: () => Promise<TelegramStatusSnapshot>;
+  startTelegramPairing: () => Promise<string>;
 }
 
 function toChannelStatus(raw: string): ChannelStatus {
@@ -57,6 +66,8 @@ function useChannels(): UseChannelsResult {
   const [status, setStatus] = useState<ChannelStatus>("not-connected");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [username, setUsername] = useState<string | null>(null);
+  const [pairedUserId, setPairedUserId] = useState<number | null>(null);
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
 
   // Track which messenger's status was last probed so disconnect knows the target.
   const currentRef = useRef<Messenger | null>(null);
@@ -73,11 +84,15 @@ function useChannels(): UseChannelsResult {
         const body = (await resp.json()) as {
           status?: string;
           username?: string | null;
+          paired_user_id?: number | null;
         };
         if (cancelled) return;
         const mapped = toChannelStatus(body.status ?? "");
         setStatus(mapped);
         if (typeof body.username === "string") setUsername(body.username);
+        if (typeof body.paired_user_id === "number") {
+          setPairedUserId(body.paired_user_id);
+        }
         if (mapped === "connected" || mapped === "connecting") {
           setCurrent("telegram");
         }
@@ -163,9 +178,13 @@ function useChannels(): UseChannelsResult {
           const body = (await resp.json()) as {
             status?: string;
             username?: string | null;
+            paired_user_id?: number | null;
           };
           const mapped = toChannelStatus(body.status ?? "");
           if (typeof body.username === "string") setUsername(body.username);
+          if (typeof body.paired_user_id === "number") {
+            setPairedUserId(body.paired_user_id);
+          }
           if (mapped === "connected") {
             setStatus("connected");
             return;
@@ -190,6 +209,8 @@ function useChannels(): UseChannelsResult {
     // stays on disk until the backend grows a DELETE/reset.
     setStatus("not-connected");
     setUsername(null);
+    setPairedUserId(null);
+    setPairingCode(null);
     setErrorMessage(null);
     log.info("telegram disconnect: local-only, backend reset not implemented");
   }, []);
@@ -228,27 +249,64 @@ function useChannels(): UseChannelsResult {
 
   const pairTelegram = useCallback((code: string) => pair(code), [pair]);
 
-  const getTelegramStatus = useCallback(async (): Promise<ChannelStatus> => {
-    try {
-      const resp = await fetch(
-        "http://localhost:8766/messenger/telegram/status",
-      );
-      if (!resp.ok) return "not-connected";
-      const body = (await resp.json()) as {
-        status?: string;
-        username?: string | null;
+  const getTelegramStatus =
+    useCallback(async (): Promise<TelegramStatusSnapshot> => {
+      const empty: TelegramStatusSnapshot = {
+        status: "not-connected",
+        username: null,
+        pairedUserId: null,
       };
-      const mapped = toChannelStatus(body.status ?? "");
-      setStatus(mapped);
-      if (typeof body.username === "string") setUsername(body.username);
-      if (mapped === "connected" || mapped === "connecting") {
-        setCurrent("telegram");
+      try {
+        const resp = await fetch(
+          "http://localhost:8766/messenger/telegram/status",
+        );
+        if (!resp.ok) return empty;
+        const body = (await resp.json()) as {
+          status?: string;
+          username?: string | null;
+          paired_user_id?: number | null;
+        };
+        const mapped = toChannelStatus(body.status ?? "");
+        const nextUsername =
+          typeof body.username === "string" ? body.username : null;
+        const nextPaired =
+          typeof body.paired_user_id === "number"
+            ? body.paired_user_id
+            : null;
+        setStatus(mapped);
+        setUsername(nextUsername);
+        setPairedUserId(nextPaired);
+        if (mapped === "connected" || mapped === "connecting") {
+          setCurrent("telegram");
+        }
+        return {
+          status: mapped,
+          username: nextUsername,
+          pairedUserId: nextPaired,
+        };
+      } catch (err) {
+        log.info("telegram status unavailable", err);
+        return empty;
       }
-      return mapped;
-    } catch (err) {
-      log.info("telegram status unavailable", err);
-      return "not-connected";
+    }, []);
+
+  // One-shot pairing-code issuer. Backend keeps the nonce in-process for
+  // TELEGRAM_PAIR_TTL (5 min). UI surfaces the returned code so the user
+  // can paste it into the Telegram chat with the bot.
+  const startTelegramPairing = useCallback(async (): Promise<string> => {
+    const resp = await fetch(
+      "http://localhost:8766/messenger/telegram/start-pairing",
+      { method: "POST" },
+    );
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
     }
+    const body = (await resp.json()) as { code?: string };
+    if (typeof body.code !== "string" || body.code.length === 0) {
+      throw new Error("Invalid pairing response");
+    }
+    setPairingCode(body.code);
+    return body.code;
   }, []);
 
   return {
@@ -256,6 +314,8 @@ function useChannels(): UseChannelsResult {
     status,
     errorMessage,
     username,
+    pairedUserId,
+    pairingCode,
     connect,
     pair,
     disconnect,
@@ -263,6 +323,7 @@ function useChannels(): UseChannelsResult {
     configureTelegram,
     pairTelegram,
     getTelegramStatus,
+    startTelegramPairing,
   };
 }
 

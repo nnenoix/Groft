@@ -148,7 +148,7 @@ function TelegramFlow() {
     (async () => {
       const s = await getTelegramStatus();
       if (cancelled) return;
-      if (s === "connected") setStep(4);
+      if (s.status === "connected") setStep(4);
       setProbed(true);
     })();
     return () => {
