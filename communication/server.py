@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -137,6 +138,32 @@ def _read_webhook_state() -> dict[str, Any]:
 def _write_webhook_state(data: dict[str, Any]) -> None:
     """Persist webhook config. Parent dir is auto-created."""
     path = _webhook_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _imessage_state_path() -> Path:
+    """On-disk home for persisted iMessage config. Sibling of the other
+    messenger state files under .claudeorch."""
+    return claudeorch_dir() / "messenger-imessage.json"
+
+
+def _read_imessage_state() -> dict[str, Any]:
+    """Load persisted iMessage state; empty dict on missing/malformed file."""
+    path = _imessage_state_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        log.warning("messenger-imessage.json unreadable", exc_info=True)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_imessage_state(data: dict[str, Any]) -> None:
+    """Persist iMessage config. Parent dir is auto-created."""
+    path = _imessage_state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -745,6 +772,125 @@ class CommunicationServer:
             if isinstance(url, str) and url:
                 return {"status": "connected", "url": url}
             return {"status": "not-connected", "url": None}
+
+        @app.post("/messenger/imessage/configure")
+        async def imessage_configure(request: Request) -> JSONResponse:
+            # Unlike Telegram/Discord, there is no live probe we can run
+            # here — AppleScript is only meaningful on a Mac, and even
+            # then "send" is fire-and-forget (Messages.app may silently
+            # defer delivery). We validate shape only and persist.
+            try:
+                body = await request.json()
+            except Exception:
+                return JSONResponse(
+                    {"ok": False, "error": "invalid json body"}, status_code=400
+                )
+            if not isinstance(body, dict):
+                return JSONResponse(
+                    {"ok": False, "error": "body must be an object"},
+                    status_code=400,
+                )
+            contact = body.get("contact")
+            if not isinstance(contact, str) or not contact.strip():
+                return JSONResponse(
+                    {"ok": False, "error": "contact is required"},
+                    status_code=400,
+                )
+            # Match the bridge constructor's 200-char cap so the
+            # persisted file never contains something the bridge would
+            # reject on load.
+            if len(contact) > 200:
+                return JSONResponse(
+                    {"ok": False, "error": "contact too long (max 200 chars)"},
+                    status_code=400,
+                )
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.run_in_executor(
+                    None,
+                    _write_imessage_state,
+                    {"contact": contact.strip()},
+                )
+            except Exception:
+                log.exception("failed to persist imessage config")
+                return JSONResponse(
+                    {"ok": False, "error": "persist failed"}, status_code=500
+                )
+            # supported=false on non-darwin is informational, not an
+            # error — the user might be configuring on Linux for later
+            # sync to a Mac, and we don't want to block that workflow.
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "platform": sys.platform,
+                    "supported": sys.platform == "darwin",
+                }
+            )
+
+        @app.post("/messenger/imessage/test")
+        async def imessage_test() -> JSONResponse:
+            # Reads config from disk so the "Test" button exercises the
+            # same path as ``notify()`` will use in production. No config
+            # → 400 so the UI prompts the user to Save first.
+            loop = asyncio.get_running_loop()
+            state = await loop.run_in_executor(None, _read_imessage_state)
+            contact = state.get("contact") if isinstance(state, dict) else None
+            if not isinstance(contact, str) or not contact:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "platform": sys.platform,
+                        "error": "imessage not configured",
+                    },
+                    status_code=400,
+                )
+            from core.messengers.imessage import IMessageBridge
+
+            try:
+                bridge = IMessageBridge(contact=contact)
+            except ValueError as exc:
+                # Saved config somehow became invalid (manual edit).
+                # Return a shaped error so the UI can prompt a re-save.
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "platform": sys.platform,
+                        "error": str(exc),
+                    },
+                    status_code=400,
+                )
+            # ``test()`` already returns the shaped dict; we pass it
+            # straight through. 200 even on ok=False so the UI can render
+            # the error inline (same pattern as /messenger/webhook/test).
+            result = await bridge.test()
+            return JSONResponse(result)
+
+        @app.get("/messenger/imessage/status")
+        async def imessage_status() -> dict[str, Any]:
+            loop = asyncio.get_running_loop()
+            state = await loop.run_in_executor(None, _read_imessage_state)
+            contact = state.get("contact") if isinstance(state, dict) else None
+            platform = sys.platform
+            # ``unsupported`` is platform-scoped and wins over config-scoped
+            # states — a saved contact on Linux still reports unsupported
+            # because sending there would fail anyway.
+            if platform != "darwin":
+                return {
+                    "status": "unsupported",
+                    "contact": contact if isinstance(contact, str) else None,
+                    "platform": platform,
+                }
+            if isinstance(contact, str) and contact:
+                return {
+                    "status": "connected",
+                    "contact": contact,
+                    "platform": platform,
+                }
+            return {
+                "status": "not-connected",
+                "contact": None,
+                "platform": platform,
+            }
 
         @app.post("/agents/spawn")
         async def agents_spawn(request: Request) -> Any:
