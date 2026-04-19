@@ -82,6 +82,7 @@ fn graceful_shutdown(app: AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // On a second launch, pull focus to the existing window instead
             // of spawning another orchestrator alongside the live one.

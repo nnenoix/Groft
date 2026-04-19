@@ -55,7 +55,7 @@ export const NAV_ITEMS: Array<{ key: NavView; label: string; Icon: (p: { size?: 
 interface CommandCenterLayoutProps {
   state: CommandCenterState;
   setState: (patch: Partial<CommandCenterState>) => void;
-  openCmdK?: () => void;
+  openCmdK: () => void;
 }
 
 export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenterLayoutProps) {

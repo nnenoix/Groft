@@ -53,8 +53,8 @@ function isTaskPriority(v: unknown): v is "high" | "med" | "low" {
   return typeof v === "string" && VALID_PRIORITIES.has(v);
 }
 
-function isMode(v: unknown): v is "solo" | "team" {
-  return v === "solo" || v === "team";
+function isMode(v: unknown): v is "solo" | "team" | "review" {
+  return v === "solo" || v === "team" || v === "review";
 }
 
 function asTaskArray(v: unknown): Task[] | undefined {

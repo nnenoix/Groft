@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Avatar } from "./Avatar";
 import { Icon } from "../icons";
 import { MODEL_OPTIONS, DEFAULT_MODEL } from "../../data/models";
@@ -19,7 +20,18 @@ const COMPOSER_MODES = [
 
 interface SlashItem { cmd: string; hint: string; }
 
-interface ComposerPayload { text: string; mode: string; model: string; }
+export interface ComposerFile {
+  name: string;
+  size: number;
+  path?: string;
+}
+
+export interface ComposerPayload {
+  text: string;
+  mode: string;
+  model: string;
+  files: ComposerFile[];
+}
 
 interface ComposerProps {
   placeholder?: string;
@@ -31,7 +43,7 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
   const [text, setText] = useState("");
   const [mode, setMode] = useState("team");
   const [model, setModel] = useState<string>(DEFAULT_MODEL);
-  const [files, setFiles] = useState<string[]>([]);
+  const [files, setFiles] = useState<ComposerFile[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
   const [thinking, setThinking] = useState(false);
@@ -60,6 +72,25 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
     };
   }, []);
 
+  async function pickFiles() {
+    // Tauri dialog plugin returns string | string[] | null; in the browser
+    // dev shell the plugin throws — swallow and no-op so the page stays alive.
+    try {
+      const selection = await open({ multiple: true });
+      if (selection === null) return;
+      const paths = Array.isArray(selection) ? selection : [selection];
+      if (paths.length === 0) return;
+      const added: ComposerFile[] = paths.map((p) => {
+        const norm = p.replace(/\\/g, "/");
+        const name = norm.split("/").pop() || p;
+        return { name, size: 0, path: p };
+      });
+      setFiles((cur) => [...cur, ...added]);
+    } catch (err) {
+      console.warn("file picker unavailable", err);
+    }
+  }
+
   function submit() {
     if (!text.trim()) return;
     setThinking(true);
@@ -70,8 +101,9 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
       thinkingTimerRef.current = null;
       setThinking(false);
     }, 1800);
-    onSubmit?.({ text, mode, model });
+    onSubmit?.({ text, mode, model, files });
     setText("");
+    setFiles([]);
   }
 
   function applySlash(c: SlashItem) {
@@ -160,7 +192,7 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
           </button>
           <span className="text-[9.5px] font-mono ml-1" style={{ color: "var(--text-dim)" }}>· {activeMode.label}</span>
           <div className="flex-1" />
-          <button className="btn btn-ghost !px-1.5 !py-1" title="Прикрепить"><Icon.Plus size={11} /></button>
+          <button onClick={pickFiles} className="btn btn-ghost !px-1.5 !py-1" title="Прикрепить"><Icon.Plus size={11} /></button>
           <button onClick={() => { setSlashOpen((v) => !v); setSettingsOpen(false); }} className="btn btn-ghost !px-1.5 !py-1" title="Команды">
             <span className="font-mono text-[10px]">/</span>
           </button>
@@ -214,7 +246,7 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
         <div className="flex-1" />
         {files.map((f, i) => (
           <span key={i} className="chip !py-0.5 !text-[10px]">
-            <Icon.Code size={9} /> {f}
+            <Icon.Code size={9} /> {f.name}
             <button onClick={() => setFiles(files.filter((_, j) => j !== i))} style={{ color: "var(--text-muted)" }}>
               <Icon.X size={9} />
             </button>
@@ -252,7 +284,7 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
 
       <div className="px-[var(--pad-3)] pb-[var(--pad-3)] flex items-center gap-2">
         <button className="btn btn-ghost !px-2 !py-1 text-[11px]" title="Прикрепить файл"
-          onClick={() => setFiles([...files, `file_${files.length + 1}.py`])}>
+          onClick={pickFiles}>
           <Icon.Plus size={12} />
         </button>
         <button className="btn btn-ghost !px-2 !py-1 text-[11px]" title="Голосом">
