@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../components/icons";
 import { Avatar } from "../components/primitives";
 import { MODEL_OPTIONS as MODELS } from "../data/models";
@@ -12,6 +13,7 @@ export type UISettings = {
   density: "compact" | "normal" | "spacious";
   accent: "default" | "violet" | "moss" | "ocean";
   backdrop: "none" | "froggly";
+  projectDir?: string;
 };
 
 interface Role {
@@ -491,12 +493,31 @@ function AgentsSettings() {
 
 /* ---- System settings ---- */
 
-function SystemSettings() {
+const DEFAULT_PROJECT_DIR = "/mnt/d/orchkerstr";
+
+function SystemSettings({ state, setState }: {
+  state: UISettings;
+  setState: (patch: Partial<UISettings>) => void;
+}) {
   const wsUrl =
     (import.meta.env.VITE_WS_URL as string | undefined) ?? "ws://localhost:8765";
   const restUrl =
     (import.meta.env.VITE_REST_URL as string | undefined) ??
     "http://localhost:8766";
+  const projectDir = state.projectDir ?? DEFAULT_PROJECT_DIR;
+
+  async function pickProjectDir() {
+    try {
+      const choice = await openDialog({ directory: true });
+      if (typeof choice === "string" && choice.length > 0) {
+        setState({ projectDir: choice });
+      }
+      // null (user cancelled) or array — leave value unchanged.
+    } catch (err) {
+      console.warn("directory picker unavailable", err);
+    }
+  }
+
   return (
     <>
       <SettingsSection title="Коммуникация" desc="WebSocket + REST сервер оркестратора.">
@@ -516,7 +537,21 @@ function SystemSettings() {
 
       <SettingsSection title="Файлы и память">
         <SettingRow label="Рабочая директория">
-          <Input value="/mnt/d/orchkerstr" mono width={280} />
+          <div className="flex items-center gap-1.5">
+            <Input
+              value={projectDir}
+              mono
+              width={240}
+              onChange={(v) => setState({ projectDir: v })}
+            />
+            <button
+              onClick={pickProjectDir}
+              className="btn btn-outline text-[11.5px]"
+              title="Выбрать папку"
+            >
+              Обзор
+            </button>
+          </div>
         </SettingRow>
         <SettingRow label="Checkpoints">
           <Input value=".groft/recovery.duckdb" mono width={280} />
@@ -641,7 +676,7 @@ export function SettingsView({ state, setState }: {
         <div className="overflow-y-auto pr-2">
           {section === "general" && <GeneralSettings state={state} setState={setState} />}
           {section === "agents"  && <AgentsSettings />}
-          {section === "system"  && <SystemSettings />}
+          {section === "system"  && <SystemSettings state={state} setState={setState} />}
           {section === "about"   && <AboutSettings />}
         </div>
       </div>

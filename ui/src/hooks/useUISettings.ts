@@ -57,6 +57,9 @@ export function loadUISettings(): UISettings {
   if (isDensity(obj.density)) merged.density = obj.density;
   if (isAccent(obj.accent)) merged.accent = obj.accent;
   if (isBackdrop(obj.backdrop)) merged.backdrop = obj.backdrop;
+  if (typeof obj.projectDir === "string" && obj.projectDir.length > 0) {
+    merged.projectDir = obj.projectDir;
+  }
   return merged;
 }
 
