@@ -58,7 +58,19 @@ class AgentSpawner:
         models = self.config.get("models", {}) if isinstance(self.config, dict) else {}
         model = models.get(agent_name, "claude-sonnet-4-6")
         cmd = ["claude", "--model", model, "--dangerously-skip-permissions"]
-        env = {"AGENT_NAME": agent_name}
+        # Project-scoped MCP config. Claude Code auto-discovers `.mcp.json` from
+        # cwd, but tmux window cwd is not guaranteed to match project_path on
+        # every host, so we pass the absolute path explicitly.
+        mcp_config = self.project_path / ".mcp.json"
+        if mcp_config.is_file():
+            cmd += ["--mcp-config", str(mcp_config)]
+        # CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 enables the agent-teams feature
+        # in the spawned process so sub-agents can see each other via the
+        # claudeorch-comms MCP bridge and answer WS messages from opus.
+        env = {
+            "AGENT_NAME": agent_name,
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+        }
         target = await self._backend.spawn(agent_name, cmd, env=env)
         if target is None:
             return False
