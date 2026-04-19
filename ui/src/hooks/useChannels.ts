@@ -18,6 +18,23 @@ export interface TelegramStatusSnapshot {
   pairedUserId: number | null;
 }
 
+export interface WebhookConfig {
+  url: string;
+  secret: string;
+  template: string;
+}
+
+export interface WebhookStatusSnapshot {
+  status: ChannelStatus;
+  url: string | null;
+}
+
+export interface WebhookTestResult {
+  ok: boolean;
+  status: number | null;
+  error: string | null;
+}
+
 export interface UseChannelsResult {
   current: Messenger | null;
   status: ChannelStatus;
@@ -28,7 +45,14 @@ export interface UseChannelsResult {
   connect: (m: Messenger, config: Record<string, string>) => Promise<void>;
   pair: (code: string) => Promise<void>;
   disconnect: () => Promise<void>;
+  // testWebhook is kept for backwards compat with old callers — now routes
+  // through the backend /messenger/webhook/test endpoint (which is the same
+  // thing testWebhookLive does). Both take a config-shaped object for
+  // compatibility; both ignore client-side templates and use the saved one.
   testWebhook: (cfg: { url: string; secret: string }) => Promise<boolean>;
+  testWebhookLive: () => Promise<WebhookTestResult>;
+  configureWebhook: (cfg: WebhookConfig) => Promise<void>;
+  getWebhookStatus: () => Promise<WebhookStatusSnapshot>;
   configureTelegram: (token: string) => Promise<void>;
   pairTelegram: (code: string) => Promise<void>;
   getTelegramStatus: () => Promise<TelegramStatusSnapshot>;
@@ -210,32 +234,112 @@ function useChannels(): UseChannelsResult {
     log.info("telegram disconnect: local-only, backend reset not implemented");
   }, []);
 
+  // Live wrapper around POST /messenger/webhook/test. Shape matches the
+  // backend response ({ok,status,error}) so the UI can render a single
+  // message with the HTTP code when successful. Separate from testWebhook
+  // so callers that want the full result (status code + error) don't have
+  // to piece it together from boolean + errorMessage state.
+  const testWebhookLive = useCallback(async (): Promise<WebhookTestResult> => {
+    setStatus("connecting");
+    setErrorMessage(null);
+    const empty: WebhookTestResult = {
+      ok: false,
+      status: null,
+      error: "request failed",
+    };
+    try {
+      const resp = await fetch("http://localhost:8766/messenger/webhook/test", {
+        method: "POST",
+      });
+      let body: WebhookTestResult;
+      try {
+        body = (await resp.json()) as WebhookTestResult;
+      } catch {
+        setStatus("error");
+        setErrorMessage(`HTTP ${resp.status}`);
+        return { ok: false, status: resp.status, error: `HTTP ${resp.status}` };
+      }
+      setStatus(body.ok ? "connected" : "error");
+      if (body.ok) setCurrent("webhook");
+      if (!body.ok && body.error) setErrorMessage(body.error);
+      return body;
+    } catch (e) {
+      setStatus("error");
+      setErrorMessage(errorToString(e));
+      return { ...empty, error: errorToString(e) };
+    }
+  }, []);
+
+  // Back-compat shim. Old callers pass {url,secret} and want a boolean.
+  // We route through the backend so the secret never hits the browser's
+  // fetch-and-log trail, and we use whatever template is already saved.
+  // If nothing is saved yet, the backend returns 400 and we surface false.
   const testWebhook = useCallback(
-    async (cfg: { url: string; secret: string }): Promise<boolean> => {
+    async (_cfg: { url: string; secret: string }): Promise<boolean> => {
+      const result = await testWebhookLive();
+      return result.ok;
+    },
+    [testWebhookLive],
+  );
+
+  const configureWebhook = useCallback(
+    async (cfg: WebhookConfig): Promise<void> => {
       setStatus("connecting");
       setErrorMessage(null);
+      setCurrent("webhook");
       try {
-        const resp = await fetch(cfg.url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Webhook-Secret": cfg.secret,
+        const resp = await fetch(
+          "http://localhost:8766/messenger/webhook/configure",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              url: cfg.url,
+              secret: cfg.secret,
+              template: cfg.template,
+            }),
           },
-          body: JSON.stringify({ type: "ping", source: "claudeorch" }),
-        });
-        const ok = resp.ok;
-        setStatus(ok ? "connected" : "error");
-        if (!ok) setErrorMessage(`HTTP ${resp.status}`);
-        if (ok) setCurrent("webhook");
-        return ok;
+        );
+        let body: { ok?: boolean; error?: string };
+        try {
+          body = await resp.json();
+        } catch {
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        if (!resp.ok || !body.ok) {
+          throw new Error(body.error || `HTTP ${resp.status}`);
+        }
+        // Configure alone doesn't prove delivery — status becomes "connected"
+        // only once a /test succeeds. Leave it at "connecting" so the UI
+        // nudges the user toward the Test button.
       } catch (e) {
         setStatus("error");
         setErrorMessage(errorToString(e));
-        return false;
+        throw e;
       }
     },
     [],
   );
+
+  const getWebhookStatus = useCallback(async (): Promise<WebhookStatusSnapshot> => {
+    const empty: WebhookStatusSnapshot = { status: "not-connected", url: null };
+    try {
+      const resp = await fetch(
+        "http://localhost:8766/messenger/webhook/status",
+      );
+      if (!resp.ok) return empty;
+      const body = (await resp.json()) as {
+        status?: string;
+        url?: string | null;
+      };
+      const mapped = toChannelStatus(body.status ?? "");
+      const url = typeof body.url === "string" ? body.url : null;
+      return { status: mapped, url };
+    } catch (err) {
+      log.info("webhook status unavailable", err);
+      return empty;
+    }
+  }, []);
 
   const configureTelegram = useCallback(
     (token: string) => connect("telegram", { token }),
@@ -315,6 +419,9 @@ function useChannels(): UseChannelsResult {
     pair,
     disconnect,
     testWebhook,
+    testWebhookLive,
+    configureWebhook,
+    getWebhookStatus,
     configureTelegram,
     pairTelegram,
     getTelegramStatus,
