@@ -13,8 +13,10 @@ models:
 # claude-sonnet-4-6 — баланс качества и скорости
 # claude-haiku-4-5-20251001 — быстрый и дешёвый
 
-# process — выбор бэкенда спавна. auto = tmux на POSIX, NotImplementedError на Windows (PR 2).
-# Можно явно зафиксировать: tmux | windows.
+# Process backend: agent spawning mechanism.
+#   auto    — tmux on POSIX, subprocess.Popen on Windows (default)
+#   tmux    — force tmux (requires `tmux` binary)
+#   windows — force Popen + CREATE_NEW_CONSOLE
 process:
   backend: auto
 

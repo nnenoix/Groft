@@ -69,3 +69,9 @@ class InMemoryBackend:
     # despawn path can drop a name from the registry without going through kill().
     def forget(self, name: str) -> None:
         self._targets.pop(name, None)
+
+    async def shutdown(self) -> None:
+        # No-op: tests assert on `calls` so shutdown doesn't need to do
+        # anything beyond participating in the Protocol surface.
+        self.calls.append(("shutdown",))
+        return None

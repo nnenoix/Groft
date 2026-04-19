@@ -2,8 +2,7 @@
 
 `select_backend(config)` returns a ProcessBackend implementation per the
 `process.backend` config key (`tmux` | `windows` | `auto`). Default `auto`
-inspects `platform.system()`. The Windows path raises NotImplementedError
-until PR 2 lands the `WindowsBackend` implementation.
+inspects `platform.system()` — tmux on POSIX, WindowsBackend on Windows.
 """
 from __future__ import annotations
 
@@ -12,8 +11,15 @@ from typing import Any
 
 from core.process.backend import ProcessBackend, Target
 from core.process.tmux_backend import TmuxBackend
+from core.process.windows_backend import WindowsBackend
 
-__all__ = ["ProcessBackend", "Target", "TmuxBackend", "select_backend"]
+__all__ = [
+    "ProcessBackend",
+    "Target",
+    "TmuxBackend",
+    "WindowsBackend",
+    "select_backend",
+]
 
 
 def select_backend(config: dict[str, Any] | None = None) -> ProcessBackend:
@@ -26,21 +32,14 @@ def select_backend(config: dict[str, Any] | None = None) -> ProcessBackend:
             backend_name = candidate
 
     if backend_name == "auto":
-        # auto-resolution: tmux on POSIX, windows backend on Windows. The
-        # Windows path is intentionally a hard-stop until PR 2 ships the
-        # implementation — surface this loudly rather than fall back to tmux
-        # on a host where tmux is missing.
+        # auto-resolution: WindowsBackend on Windows, TmuxBackend on POSIX.
+        # The Windows module is import-safe everywhere (CREATE_NEW_CONSOLE
+        # resolves to 0 on POSIX) so the top-level import above is fine.
         if platform.system() == "Windows":
-            raise NotImplementedError(
-                "Windows backend lands in PR 2; "
-                "set process.backend: tmux if you need to force"
-            )
+            return WindowsBackend()
         return TmuxBackend()
     if backend_name == "tmux":
         return TmuxBackend()
     if backend_name == "windows":
-        raise NotImplementedError(
-            "Windows backend lands in PR 2; "
-            "set process.backend: tmux if you need to force"
-        )
+        return WindowsBackend()
     raise ValueError(f"unknown process.backend: {backend_name!r}")

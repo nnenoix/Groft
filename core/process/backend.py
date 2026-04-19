@@ -60,3 +60,14 @@ class ProcessBackend(Protocol):
     def list_targets(self) -> dict[str, Target]:
         """Snapshot mapping agent_name -> Target. For checkpoints/UI."""
         ...
+
+    async def shutdown(self) -> None:
+        """Release backend-level resources on orchestrator teardown.
+
+        Implementations that own child processes (e.g. WindowsBackend) must
+        kill them here so we don't leak console windows or grandchildren
+        when the orchestrator exits. Implementations that own no such
+        resources (TmuxBackend — tmux windows outlive this process by design;
+        InMemoryBackend — no real processes) may no-op.
+        """
+        ...
