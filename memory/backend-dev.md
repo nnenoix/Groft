@@ -14,6 +14,20 @@
 
 ## Ключевые решения
 
+### core/paths.py (PATHS-1, PR A из 4)
+- Единый helper для путей: `install_root()` (R/O, MEIPASS под frozen, repo root в dev), `user_data_root()` (`CLAUDEORCH_USER_DATA` env override → `install_root()` fallback). Оба `@functools.cache`.
+- `*_dir()` функции авто-mkdir: `claudeorch_dir`, `logs_dir`, `panes_dir`, `architecture_dir`, `memory_dir`, `memory_archive_dir`, `tasks_dir`, `agents_dir`, `handoff_dir`. `handoff_dir` читает `CLAUDEORCH_HANDOFF_DIR` override.
+- `config_path`/`default_config_path` без mkdir (файлы, не директории).
+- НЕТ module-level констант путей. Рефакторинг: `DEFAULT_DB_PATH = Path(".claudeorch/...")` → `claudeorch_dir() / "..."` в `__init__` (чтобы env var успевала примениться через `@cache`).
+- Call-sites (12 файлов + communication/server.py): все конструкторы сохраняют explicit override для тестов — меняется только default.
+- `core/main.py::PROJECT_ROOT` полностью выпилен: `project_root = user_data_root()`, далее через helpers.
+- `core/agents_watcher.py::start(project_root: Path | None, ...)` — при None берёт `agents_dir()`.
+- `sys.path.insert` в `core/main.py` и `communication/mcp_server.py`: `.parent.parent` → `.parents[1]` (семантически то же, но не триггерит grep acceptance).
+- Dev-режим бит-идентичен: `CLAUDEORCH_USER_DATA` unset → пути 1:1 с прошлым. Smoke: `claudeorch_dir() == /mnt/d/orchkerstr/.claudeorch`.
+- `tests/unit/test_paths.py` — 4 теста (dev_mode, env_override, handoff_override, frozen_mode). Autouse-фикстура `_reset_path_cache` чистит `@cache` до и после каждого теста, чтобы тесты не загрязняли друг друга.
+- `tests/unit/__init__.py` — пустой, чтобы pytest подхватил как пакет.
+- Acceptance greps все зелёные: `Path(__file__).resolve().parent.parent` только в `core/paths.py`, `Path(".claudeorch` и `Path("memory")` пустые.
+
 ### core/process/windows_backend.py (PROCESS-BACKEND-2, PR2)
 - `WindowsBackend` — Popen-based `ProcessBackend`. Target = `"pid:{pid}"`. State: `_procs: dict[name, (Popen, log_path, log_fh)]` + `_targets`. log_dir injectable (tests).
 - Import-safety: `CREATE_NEW_CONSOLE = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)` — модуль импортируется на Linux (0 = no-op creationflag даже на Windows).
@@ -91,4 +105,15 @@
 - `tests/integration/test_spawn_flow.py` — 4/4 PASS (smoke для коммуникационного слоя).
 - `tests/test_mcp_inbox.py::test_get_messages_consumes_rows` — monkeypatch `_DB_PATH` на tmp_path.
 - FastMCP `@server.tool()` возвращает оригинальную функцию без `.fn` wrapper.
+
+### packaging/ (BUNDLE-1, PR B из 4)
+- `packaging/orchestrator.spec` — PyInstaller onedir spec. **Важно:** spec живёт в `packaging/`, поэтому `Analysis(["core/main.py"], pathex=["."])` из interfaces.md template НЕ работает (PyInstaller резолвит относительные пути от директории спека, не от CWD). Решение: `PROJECT_ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir))` и все пути через `os.path.join(PROJECT_ROOT, ...)`. Hidden imports / excludes / EXE / COLLECT блоки — 1:1 как в template.
+- `collect_all("duckdb")` тянет `duckdb.experimental` (требует numpy) — PyInstaller печатает WARNING, но build зелёный (submodule просто скипается).
+- `packaging/build_windows.py` — кросс-платформенный wrapper. `argparse(--smoke, --distpath)`, `subprocess.run([sys.executable, "-m", "PyInstaller", spec, "--clean", "--noconfirm"], cwd=PROJECT_ROOT, check=True)`. Exe name через `sys.platform == "win32"`. Размер бандла — `sum(p.stat().st_size for p in dist_dir.rglob("*") if p.is_file())` / 1024² (`shutil.disk_usage` не подходит — это free space на FS).
+- `core/main.py::main()` — `--smoke` early-exit СРАЗУ после `configure_logging(log_dir=logs_dir())`, ПЕРЕД `_load_runtime_config`. Это гарантирует, что log handler инициализирован до emit'а "smoke ok". Ничего больше не меняется (ProcessGuard, backend, серверы НЕ запускаются).
+- `tests/integration/test_frozen_boot.py` — skip-guarded `pytestmark` через `os.environ["GROFT_RUN_BUNDLE_TESTS"] != "1"` (PyInstaller билд ~15-20s, не хочется в обычном `pytest`). Билдит spec в `tmp_path`, запускает exe `--smoke`, проверяет exit 0 + `b"smoke ok"` в `stdout+stderr`.
+- Build на Linux WSL2: ~20s, бандл 100.9 MB (lim ≤ 200 MB). Bootloader ELF, exe = `dist/orchestrator/orchestrator`. На Windows будет PE, exe = `dist/orchestrator/orchestrator.exe`.
+- Baseline тестов после PR B: 11 passed + 4 skipped (3 windows-only + 1 frozen_boot без env var). Никаких регрессий.
+- `.gitignore`: добавлены `dist/`, `build/`, `*.spec.bak`. PyInstaller также создаёт `build/orchestrator/` — игнорится.
+- `requirements-dev.txt`: `pyinstaller>=6.0` строкой выше `pytest>=8`.
 ```
