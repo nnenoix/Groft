@@ -142,6 +142,29 @@
 - Все failure modes (no file, bad token, PTB missing, ctor raise, start raise) → log + return None. Boot никогда не крашится.
 - Вызов после `orchestrator = Orchestrator(spawner)`, перед `CommunicationServer(...)`. Teardown: `await telegram_bridge.stop()` перед `spawner.despawn_all()`.
 
+## core/messengers/imessage.py (Phase 6.5 — outbound-only, macOS)
+
+- `IS_MACOS` module-level (`sys.platform == "darwin"`) — monkeypatch target для тестов вместо мутации `sys.platform`.
+- `IMessageBridge(contact)` — validate non-empty + len<=200; `.strip()` at construct.
+- `notify(event, agent, text) -> bool` — non-darwin → log warning + False. На darwin: `_escape_for_applescript` (`\`→`\\`, `"`→`\"`), `tell application "Messages" to send "<body>" to buddy "<contact>" of service 1`, `subprocess.run(["osascript","-e",script], timeout=5, capture_output=True)`. FileNotFoundError/TimeoutExpired/generic → swallow+False.
+- `test()` → `{ok, platform, error}` dict. На non-darwin возвращает без subprocess.
+- Body format: `f"[{event}] {agent}: {text}"` — совпадает с webhook default template.
+
+## communication/server.py — iMessage REST (Phase 6.5)
+
+- `_imessage_state_path()` → `.claudeorch/messenger-imessage.json` (sibling webhook/telegram/discord).
+- `sys` import в server.py — читается `sys.platform` live в endpoint'ах (не кэшируется).
+- `POST /messenger/imessage/configure` body `{contact}`: shape-validate (non-empty, <=200) → persist `{contact}` → `{ok, platform, supported}`. `supported=false` НЕ блокирует — prep на Linux для sync на Mac.
+- `POST /messenger/imessage/test` — 400 если no config; иначе `IMessageBridge(contact).test()` прямая передача результата (200 с ok=false на non-darwin/delivery fail — shape match с webhook/test).
+- `GET /messenger/imessage/status` → `{status, contact, platform}`. `status="unsupported"` на non-darwin перекрывает saved config; на darwin: connected если есть contact, иначе not-connected.
+
+## tests/unit/test_imessage_bridge.py
+
+- Mock `sys.platform`: два отдельных хука — `monkeypatch.setattr(imessage, "IS_MACOS", True/False)` для bridge, `monkeypatch.setattr("communication.server.sys.platform", "darwin"/"linux")` для endpoint'ов. Server читает `sys.platform` live, bridge — свою module-level константу.
+- `fake_completed(returncode, stderr)` — minimal stub с `.returncode/.stdout/.stderr`; не нужно строить реальный `CompletedProcess`.
+- Escape-тест: верифицирует `\"hello\"` и `\\n` в сгенерированном script; проверяет структурную целостность `"<body>" to buddy "<contact>"`.
+- 27 тестов, без новых deps. Baseline после: 126 passed, 4 skipped.
+
 ## tests/unit/test_main_telegram_boot.py (Phase 6.2)
 
 - `_maybe_start_telegram_bridge` тестируется напрямую (не весь `main()`). `CLAUDEORCH_USER_DATA` изолирован через fixture.
