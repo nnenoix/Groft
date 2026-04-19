@@ -66,6 +66,31 @@ def _telegram_state_path() -> Path:
     return claudeorch_dir() / "messenger-telegram.json"
 
 
+def _webhook_state_path() -> Path:
+    """On-disk home for persisted webhook config. Sibling of telegram state."""
+    return claudeorch_dir() / "messenger-webhook.json"
+
+
+def _read_webhook_state() -> dict[str, Any]:
+    """Load persisted webhook state; empty dict on missing/malformed file."""
+    path = _webhook_state_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        log.warning("messenger-webhook.json unreadable", exc_info=True)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_webhook_state(data: dict[str, Any]) -> None:
+    """Persist webhook config. Parent dir is auto-created."""
+    path = _webhook_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def _read_telegram_state() -> dict[str, Any]:
     """Load persisted Telegram state; empty dict on missing/malformed file."""
     path = _telegram_state_path()
@@ -434,6 +459,149 @@ class CommunicationServer:
                 "username": username if isinstance(username, str) else None,
                 "paired_user_id": paired if isinstance(paired, int) else None,
             }
+
+        @app.post("/messenger/webhook/configure")
+        async def webhook_configure(request: Request) -> JSONResponse:
+            # Shape-validate body first — reject anything weird before we
+            # touch the constructor (which also validates but raises
+            # ValueError that we'd then have to massage into a 400).
+            try:
+                body = await request.json()
+            except Exception:
+                return JSONResponse(
+                    {"ok": False, "error": "invalid json body"}, status_code=400
+                )
+            if not isinstance(body, dict):
+                return JSONResponse(
+                    {"ok": False, "error": "body must be an object"},
+                    status_code=400,
+                )
+            url = body.get("url")
+            secret = body.get("secret")
+            template = body.get("template")
+            if not isinstance(url, str) or not url:
+                return JSONResponse(
+                    {"ok": False, "error": "url is required"},
+                    status_code=400,
+                )
+            # URL scheme guard — http/https only, never file://, javascript:,
+            # etc. Anything else would be a config footgun at best and an
+                # SSRF enabler at worst.
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                return JSONResponse(
+                    {"ok": False, "error": "url must be http(s) with a host"},
+                    status_code=400,
+                )
+            if not isinstance(secret, str):
+                return JSONResponse(
+                    {"ok": False, "error": "secret must be a string"},
+                    status_code=400,
+                )
+            if not isinstance(template, str) or not template:
+                return JSONResponse(
+                    {"ok": False, "error": "template is required"},
+                    status_code=400,
+                )
+            # Delegate template validation to the bridge constructor so we
+            # only have ONE validation code path. ValueError → 400 with the
+            # ctor's message (it's already user-facing).
+            from core.messengers.webhook import WebhookBridge
+
+            try:
+                WebhookBridge(url=url, secret=secret, template=template)
+            except ValueError as exc:
+                return JSONResponse(
+                    {"ok": False, "error": str(exc)}, status_code=400
+                )
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.run_in_executor(
+                    None,
+                    _write_webhook_state,
+                    {"url": url, "secret": secret, "template": template},
+                )
+            except Exception:
+                log.exception("failed to persist webhook config")
+                return JSONResponse(
+                    {"ok": False, "error": "persist failed"}, status_code=500
+                )
+            return JSONResponse({"ok": True})
+
+        @app.post("/messenger/webhook/test")
+        async def webhook_test() -> JSONResponse:
+            # Reads config from disk so the live UI "Test" button exercises
+            # the same path as ``notify()`` will use in production. If there
+            # is no config yet, surface a clear 400 — the UI should have
+            # prompted the user to Save first.
+            loop = asyncio.get_running_loop()
+            state = await loop.run_in_executor(None, _read_webhook_state)
+            url = state.get("url") if isinstance(state, dict) else None
+            secret = state.get("secret") if isinstance(state, dict) else None
+            template = state.get("template") if isinstance(state, dict) else None
+            if not (
+                isinstance(url, str)
+                and url
+                and isinstance(secret, str)
+                and isinstance(template, str)
+                and template
+            ):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "status": None,
+                        "error": "webhook not configured",
+                    },
+                    status_code=400,
+                )
+            from core.messengers.webhook import WebhookBridge
+
+            try:
+                bridge = WebhookBridge(url=url, secret=secret, template=template)
+            except ValueError as exc:
+                # Saved config somehow became invalid (manual edit, partial
+                # write). Don't crash — return a shaped error so the UI can
+                # prompt a re-save.
+                return JSONResponse(
+                    {"ok": False, "status": None, "error": str(exc)},
+                    status_code=400,
+                )
+            try:
+                resp = await bridge.notify(
+                    "test", "groft", "Webhook test from Groft"
+                )
+            except Exception as exc:
+                # Connection refused, DNS failure, TLS error, timeout — any
+                # network-layer failure collapses to a single "not delivered"
+                # signal for the UI. Class name is safe to expose; body isn't.
+                log.warning("webhook test: network error", exc_info=True)
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "status": None,
+                        "error": f"{exc.__class__.__name__}: {exc}",
+                    }
+                )
+            return JSONResponse(
+                {
+                    "ok": bool(resp.is_success),
+                    "status": int(resp.status_code),
+                    "error": None
+                    if resp.is_success
+                    else f"HTTP {resp.status_code}",
+                }
+            )
+
+        @app.get("/messenger/webhook/status")
+        async def webhook_status() -> dict[str, Any]:
+            loop = asyncio.get_running_loop()
+            state = await loop.run_in_executor(None, _read_webhook_state)
+            url = state.get("url") if isinstance(state, dict) else None
+            if isinstance(url, str) and url:
+                return {"status": "connected", "url": url}
+            return {"status": "not-connected", "url": None}
 
         @app.post("/agents/spawn")
         async def agents_spawn(request: Request) -> Any:
