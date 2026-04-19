@@ -419,3 +419,227 @@ async def test_bridge_accept_pairing_honors_ttl(tmp_path: Path) -> None:
     bridge.register_pairing_code("BBB222", ts=100.0)
     assert not bridge.accept_pairing("BBB222", user_id=7, now=500.0, ttl=300.0)
     assert 7 not in bridge.allowlist
+
+
+# ------------------------------------------------------------------
+# PTB handler coverage — _on_pair / _on_ask / _on_fallback
+# ------------------------------------------------------------------
+
+
+class _FakeMessage:
+    """Minimal stand-in for telegram.Message — only the bits our handlers touch."""
+
+    def __init__(self) -> None:
+        self.replies: list[str] = []
+
+    async def reply_text(self, text: str) -> None:
+        self.replies.append(text)
+
+
+class _FakeUser:
+    def __init__(self, user_id: int) -> None:
+        self.id = user_id
+
+
+class _FakeChat:
+    def __init__(self, chat_id: int) -> None:
+        self.id = chat_id
+
+
+class _FakeUpdate:
+    def __init__(
+        self,
+        user_id: int,
+        chat_id: int | None = None,
+        message: _FakeMessage | None = None,
+    ) -> None:
+        self.effective_user = _FakeUser(user_id)
+        self.effective_chat = _FakeChat(chat_id) if chat_id is not None else None
+        self.effective_message = message or _FakeMessage()
+        # PTB also exposes update.message alongside effective_message; the
+        # handlers read either one, so mirror the same object here.
+        self.message = self.effective_message
+
+
+class _FakeContext:
+    def __init__(self, args: list[str]) -> None:
+        self.args = list(args)
+
+
+class _FakeBackend:
+    """ProcessBackend stub — records send_text calls and fakes list_targets."""
+
+    def __init__(self, targets: dict[str, str] | None = None) -> None:
+        self._targets = dict(targets or {})
+        self.sent: list[tuple[str, str]] = []
+
+    def list_targets(self) -> dict[str, str]:
+        return dict(self._targets)
+
+    async def send_text(self, target: str, text: str) -> bool:
+        self.sent.append((target, text))
+        return True
+
+
+async def _noop_polling(bridge: TelegramBridge) -> None:
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_on_pair_success_replies_paired() -> None:
+    orch = _OrchStub()
+    bridge = TelegramBridge(
+        "123456:ABCdef_ghi-JKL",
+        orch,  # type: ignore[arg-type]
+        polling_factory=_noop_polling,
+    )
+    # Seed a code; handler uses loop.time() for the "now" probe so we freeze
+    # that window by registering with the current loop time.
+    now = asyncio.get_running_loop().time()
+    bridge.register_pairing_code("ABCDEF", ts=now)
+
+    msg = _FakeMessage()
+    update = _FakeUpdate(user_id=42, chat_id=100, message=msg)
+    context = _FakeContext(args=["ABCDEF"])
+
+    await bridge._on_pair(update, context)
+
+    assert bridge.paired_user_id == 42
+    assert 42 in bridge.allowlist
+    # \u2713 = check mark — the handler uses the unicode char directly
+    assert msg.replies == ["Paired \u2713"]
+
+
+@pytest.mark.asyncio
+async def test_on_pair_invalid_code_replies_failure() -> None:
+    orch = _OrchStub()
+    bridge = TelegramBridge(
+        "123456:ABCdef_ghi-JKL",
+        orch,  # type: ignore[arg-type]
+        polling_factory=_noop_polling,
+    )
+    # No code registered — any input is invalid.
+
+    msg = _FakeMessage()
+    update = _FakeUpdate(user_id=42, chat_id=100, message=msg)
+    context = _FakeContext(args=["WRONGCODE"])
+
+    await bridge._on_pair(update, context)
+
+    assert bridge.paired_user_id is None
+    assert msg.replies == ["Invalid/expired code"]
+
+
+@pytest.mark.asyncio
+async def test_on_pair_missing_arg_shows_usage() -> None:
+    orch = _OrchStub()
+    bridge = TelegramBridge(
+        "123456:ABCdef_ghi-JKL",
+        orch,  # type: ignore[arg-type]
+        polling_factory=_noop_polling,
+    )
+
+    msg = _FakeMessage()
+    update = _FakeUpdate(user_id=42, chat_id=100, message=msg)
+    context = _FakeContext(args=[])
+
+    await bridge._on_pair(update, context)
+
+    assert bridge.paired_user_id is None
+    assert msg.replies == ["Usage: /pair <code>"]
+
+
+@pytest.mark.asyncio
+async def test_on_ask_parses_agent_and_calls_handle_ask() -> None:
+    orch = _OrchStub()
+    backend = _FakeBackend(targets={"backend-dev": "claudeorch:backend-dev"})
+    # Pre-seed the agent as active so spawn_role doesn't get called (the test
+    # is about argv parsing + dispatch, not spawn).
+    orch.active_agents["backend-dev"] = object()
+
+    bridge = TelegramBridge(
+        "123456:ABCdef_ghi-JKL",
+        orch,  # type: ignore[arg-type]
+        allowlist={42},
+        backend=backend,  # type: ignore[arg-type]
+        polling_factory=_noop_polling,
+    )
+    assert bridge.paired_user_id == 42  # derived from single-entry allowlist
+
+    msg = _FakeMessage()
+    update = _FakeUpdate(user_id=42, chat_id=500, message=msg)
+    context = _FakeContext(args=["backend-dev", "please", "read", "memory"])
+
+    await bridge._on_ask(update, context)
+
+    # handle_ask should have routed to the backend with the joined tail.
+    assert backend.sent == [("claudeorch:backend-dev", "please read memory")]
+    # spawn_role is NOT called because the agent is already active.
+    assert orch.spawn_calls == []
+
+
+@pytest.mark.asyncio
+async def test_on_ask_drops_non_paired_user() -> None:
+    orch = _OrchStub()
+    backend = _FakeBackend(targets={"backend-dev": "claudeorch:backend-dev"})
+    bridge = TelegramBridge(
+        "123456:ABCdef_ghi-JKL",
+        orch,  # type: ignore[arg-type]
+        allowlist={42},
+        backend=backend,  # type: ignore[arg-type]
+        polling_factory=_noop_polling,
+    )
+
+    msg = _FakeMessage()
+    # user_id 999 is NOT paired.
+    update = _FakeUpdate(user_id=999, chat_id=500, message=msg)
+    context = _FakeContext(args=["backend-dev", "hello"])
+
+    await bridge._on_ask(update, context)
+
+    # No pane write, no spawn, no reply — we silently drop strangers.
+    assert backend.sent == []
+    assert orch.spawn_calls == []
+    assert msg.replies == []
+
+
+@pytest.mark.asyncio
+async def test_on_ask_missing_text_shows_usage() -> None:
+    orch = _OrchStub()
+    backend = _FakeBackend(targets={"backend-dev": "claudeorch:backend-dev"})
+    bridge = TelegramBridge(
+        "123456:ABCdef_ghi-JKL",
+        orch,  # type: ignore[arg-type]
+        allowlist={42},
+        backend=backend,  # type: ignore[arg-type]
+        polling_factory=_noop_polling,
+    )
+
+    msg = _FakeMessage()
+    update = _FakeUpdate(user_id=42, chat_id=500, message=msg)
+    context = _FakeContext(args=["backend-dev"])  # no text
+
+    await bridge._on_ask(update, context)
+
+    assert backend.sent == []
+    assert msg.replies == ["Usage: /ask <agent> <text>"]
+
+
+@pytest.mark.asyncio
+async def test_on_fallback_replies_hint() -> None:
+    orch = _OrchStub()
+    bridge = TelegramBridge(
+        "123456:ABCdef_ghi-JKL",
+        orch,  # type: ignore[arg-type]
+        polling_factory=_noop_polling,
+    )
+
+    msg = _FakeMessage()
+    update = _FakeUpdate(user_id=42, chat_id=500, message=msg)
+    context = _FakeContext(args=[])
+
+    await bridge._on_fallback(update, context)
+
+    assert len(msg.replies) == 1
+    assert "/ask" in msg.replies[0]
+    assert "/pair" in msg.replies[0]
