@@ -165,6 +165,53 @@
 - Escape-тест: верифицирует `\"hello\"` и `\\n` в сгенерированном script; проверяет структурную целостность `"<body>" to buddy "<contact>"`.
 - 27 тестов, без новых deps. Baseline после: 126 passed, 4 skipped.
 
+## core/vision.py (Phase 7 — experimental)
+
+- `VisionError(Exception)` — единственный wrapping-type; ловят в REST/MCP handlers и сплющивают до 500 / "Vision error:" текста.
+- `VISION_MODEL = "claude-sonnet-4-6"` — пиннут. Haiku vision не верифицирован; любые downgrade-попытки должны проходить через обновление константы.
+- `capture_screen(monitor_idx=0)` — `run_in_executor(None, _capture_screen_sync, ...)`. mss 1-based (monitors[0] = virtual "all"), публичный API 0-based → `real_idx = monitor_idx + 1`.
+- `ask_about_image`/`ask_about_text` — shared `_post_messages(payload)`: `x-api-key`+`anthropic-version:2023-06-01`+`content-type:application/json`. Timeout 30s. Non-200 → `VisionError("Anthropic API error {code}: {body}")`. Malformed body → `VisionError` через `_extract_text` (reject non-dict, empty content[], non-string text).
+- Image content ordering: `[{image}, {text}]` — tests проверяют порядок (model behaviour зависит).
+- Prompts — module-level templates (`_IMAGE_PROMPT_TEMPLATE`, `_TEXT_PROMPT_TEMPLATE`) чтобы тесты могли assertить точный текст.
+- `agent_label=None`/`""` → falls back to `"unknown"` в тексте промпта.
+- `_require_api_key` читает `ANTHROPIC_API_KEY` из env, raises VisionError если нет.
+
+## communication/mcp_server.py — vision tools
+
+- `_TMUX_SESSION = "claudeorch"` — duplicated constant между mcp_server.py и server.py. Разные процессы, share нельзя без IPC → duplicate осознанно.
+- `_capture_pane_sync(agent_name)` — `subprocess.run(["tmux","capture-pane","-t",f"{session}:{agent}","-p"], capture_output=True, text=True, timeout=5)`. FileNotFoundError/TimeoutExpired/non-zero returncode → VisionError с stderr.
+- `_capture_pane` = async wrapper через `run_in_executor(None, _capture_pane_sync, ...)`.
+- `@server.tool()` декоратор FastMCP НЕ оборачивает function — возвращает raw callable. Тесты вызывают `mcp_server.see_screen(...)` напрямую (не `.fn`).
+- Tool descriptions содержат warning про multimodal cost (5-10x на `see_screen`, ~5x Sonnet на `see_agent_pane` vs Haiku text baseline) — это единственный warning-канал до operator'а.
+- VisionError в tool → возвращается как `f"Vision error: {exc}"` (MCP tool signature = str, не raise).
+
+## communication/server.py — /vision/* REST
+
+- `_VISION_TMUX_SESSION = "claudeorch"` + `_capture_tmux_pane_sync` — module-level, зеркалят MCP hook.
+- `POST /vision/see-pane` body `{agent, question}`: validate → capture_tmux_pane → `ask_about_text(pane, question, agent_label=agent)`. VisionError → 500 `{error}`. Success → `{answer, token_usage: {input: null, output: null}}` — placeholder shape на будущее.
+- `POST /vision/see-screen` body `{monitor_idx, question}`: `capture_screen` → `ask_about_image`. monitor_idx default 0, reject negative/non-int.
+- Import `core.vision` внутри handler'а (lazy) чтобы случайный import mss не ломал boot на headless системах до первого vision-вызова.
+
+## tests/unit/test_vision.py
+
+- 20 тестов (1 skipped — capture_screen без display/mss).
+- `_install_mock_transport` — same pattern как `test_telegram_bridge.py` для getMe: `httpx.MockTransport` + monkeypatch `httpx.AsyncClient.__init__` инжектит transport в каждый новый клиент.
+- `_anthropic_ok(text)` — canned response `{content: [{type: text, text}], usage: {...}}`.
+- Skip rule: `"CI" in os.environ or (sys.platform == "linux" and not DISPLAY) or not _mss_available()`.
+- MCP tool tests: monkeypatch `mcp_server.capture_screen`/`ask_about_image`/`_capture_pane`/`ask_about_text` на fake coroutines, assert args passed.
+- Baseline после: 145 passed, 5 skipped (было 126/4).
+
+## Зависимости
+
+- `mss>=9.0` в `requirements.txt`. НЕ добавляем в `requirements-dev.txt` (transitive через `-r requirements.txt`).
+- SDK `anthropic` НЕ тянется — зовем HTTP напрямую через httpx (SDK heavy + pulls tokenizer).
+
+## WSL/Wayland quirks
+
+- WSL2 без X server: `DISPLAY=:0` может быть выставлен системой (WSLg), но реально grab может упасть ("XOpenDisplay failed"). Тест skip'ается по `_mss_available()` если mss не установлен, но даже при установленном mss на headless машине grab fail'нется — falling into `VisionError("screen capture failed: ...")`.
+- macOS требует Screen Recording permission в System Settings; без неё CGDisplayCreateImage вернет черный кадр или пустой — не наш code path, делегируем операторам.
+- Wayland (Gnome/KDE native): mss использует X11 API → нужен XWayland. Fallback на portals не реализован в mss 9 — документировано как known limitation.
+
 ## tests/unit/test_main_telegram_boot.py (Phase 6.2)
 
 - `_maybe_start_telegram_bridge` тестируется напрямую (не весь `main()`). `CLAUDEORCH_USER_DATA` изолирован через fixture.
