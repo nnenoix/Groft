@@ -115,6 +115,12 @@ class ProcessGuard:
         except EOFError:
             return ""
 
+    async def request_shutdown(self) -> None:
+        # public entry used by non-signal shutdown paths (e.g. POST /shutdown
+        # from the Tauri sidecar close handler). Same teardown sequence as a
+        # SIGTERM-triggered shutdown — checkpoint, agent stop, event set.
+        await self._shutdown()
+
     async def _shutdown(self) -> None:
         if self._checkpoint_cb is not None:
             await self._checkpoint_cb()

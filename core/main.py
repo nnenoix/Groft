@@ -106,6 +106,7 @@ async def main() -> None:
         tasks_dir=tasks_dir(),
     )
     await comm_server.start()
+    comm_server.set_shutdown_callback(process_guard.request_shutdown)
 
     # Opus is the orchestrator — the UI and other agents address it as "opus",
     # so the WS registration name must match that to keep messages routable.

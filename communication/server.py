@@ -6,7 +6,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import duckdb
 import uvicorn
@@ -81,6 +81,10 @@ class CommunicationServer:
         # captured at start() so _unregister can trampoline back to the server
         # loop via call_soon_threadsafe when invoked from a non-loop thread.
         self._loop: asyncio.AbstractEventLoop | None = None
+        # invoked by POST /shutdown; wired by core/main.py to
+        # ProcessGuard.request_shutdown so the Tauri window close path hits
+        # the same teardown as SIGTERM.
+        self._shutdown_callback: Callable[[], Awaitable[None]] | None = None
         self._started = False
 
     async def start(self) -> None:
@@ -170,6 +174,14 @@ class CommunicationServer:
         with self._lock:
             return list(self._registry.keys())
 
+    def set_shutdown_callback(
+        self, fn: Callable[[], Awaitable[None]] | None
+    ) -> None:
+        # callable is dispatched via create_task from POST /shutdown so the
+        # endpoint returns 200 immediately and the shutdown work runs in the
+        # background — Tauri's 2s http timeout never trips.
+        self._shutdown_callback = fn
+
     async def broadcast(self, sender: str, content: str) -> None:
         payload = {"type": "broadcast", "from": sender, "content": content}
         await self._route_broadcast(sender, payload)
@@ -202,6 +214,18 @@ class CommunicationServer:
                     "claude-haiku-4-5-20251001",
                 ]
             }
+
+        @app.post("/shutdown")
+        async def shutdown() -> dict[str, bool]:
+            # fire-and-forget: schedule the callback and respond immediately so
+            # the Tauri graceful path doesn't wait on teardown (which can take
+            # seconds as uvicorn/WS/DB unwind).
+            cb = self._shutdown_callback
+            if cb is not None:
+                task = asyncio.get_running_loop().create_task(cb())
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
+            return {"ok": True}
 
         @app.get("/tasks")
         async def tasks_snapshot() -> dict[str, Any]:
