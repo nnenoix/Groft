@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 # script-mode: ensure project root is importable before `from core.*` resolves
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import asyncio
 import json
@@ -22,6 +22,13 @@ from core.guard.process_guard import ProcessGuard
 from core.handoff import scan_and_record_handoff
 from core.logging_setup import configure_logging
 from core.orchestrator import Orchestrator
+from core.paths import (
+    architecture_dir,
+    config_path,
+    logs_dir,
+    tasks_dir,
+    user_data_root,
+)
 from core.process import select_backend
 from core.recovery.recovery_manager import RecoveryManager
 from core.session.checkpoint import Checkpoint, CheckpointManager
@@ -29,9 +36,6 @@ from core.spawner import AgentSpawner
 from core.watchdog.agent_watchdog import AgentWatchdog
 from git_manager.manager import GitManager
 from memory.manager import MemoryManager
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = PROJECT_ROOT / "config.yml"
 
 log = logging.getLogger(__name__)
 
@@ -78,8 +82,9 @@ def _load_runtime_config(path: Path) -> tuple[dict[str, Any], str, dict[str, str
 
 
 async def main() -> None:
-    configure_logging(log_dir=PROJECT_ROOT / ".claudeorch" / "logs")
-    raw_config, lead_target, agent_targets = _load_runtime_config(CONFIG_PATH)
+    project_root = user_data_root()
+    configure_logging(log_dir=logs_dir())
+    raw_config, lead_target, agent_targets = _load_runtime_config(config_path())
 
     # install signal handlers before anything binds ports / opens files so a
     # Ctrl-C during boot lands in the guard instead of aborting mid-startup
@@ -95,7 +100,7 @@ async def main() -> None:
     comm_server = CommunicationServer(
         backend=backend,
         lead_target=lead_target,
-        tasks_dir=PROJECT_ROOT / "tasks",
+        tasks_dir=tasks_dir(),
     )
     await comm_server.start()
 
@@ -109,13 +114,13 @@ async def main() -> None:
     error_handler = ErrorHandler()
     git_manager = GitManager()
     memory_manager = MemoryManager()
-    spawner = AgentSpawner(str(PROJECT_ROOT), str(CONFIG_PATH), backend=backend)
+    spawner = AgentSpawner(str(project_root), str(config_path()), backend=backend)
     orchestrator = Orchestrator(spawner)
 
     await checkpoint_manager.initialize()
     await error_handler.initialize()
-    await git_manager.initialize(PROJECT_ROOT)
-    await memory_manager.initialize(PROJECT_ROOT)
+    await git_manager.initialize(project_root)
+    await memory_manager.initialize(project_root)
 
     recovery_manager = RecoveryManager(
         checkpoint_manager,
@@ -240,7 +245,7 @@ async def main() -> None:
         log.info("ClaudeOrch ready")
 
     try:
-        await scan_and_record_handoff(PROJECT_ROOT)
+        await scan_and_record_handoff(project_root)
     except Exception:
         log.exception("handoff scan failed")
 
@@ -250,7 +255,7 @@ async def main() -> None:
         await comm_server.broadcast_roster()
 
     agents_watcher_task = await agents_watcher.start(
-        PROJECT_ROOT, _on_agents_dir_change
+        project_root, _on_agents_dir_change
     )
 
     async def _dispatch_inbox_command(content: str) -> None:
@@ -322,13 +327,13 @@ async def main() -> None:
                 log.exception("opus-inbox /restart failed role=%s", arg)
         elif cmd == "/rescan-handoff":
             try:
-                new_files = await scan_and_record_handoff(PROJECT_ROOT)
+                new_files = await scan_and_record_handoff(project_root)
                 await comm_client.handoff_event(new_files or [])
             except Exception:
                 log.exception("opus-inbox /rescan-handoff failed")
         elif cmd == "/runtest":
             try:
-                test_path = PROJECT_ROOT / "architecture" / "current-test.md"
+                test_path = architecture_dir() / "current-test.md"
                 body = ""
                 if test_path.exists():
                     body = test_path.read_text(encoding="utf-8")
@@ -378,7 +383,7 @@ async def main() -> None:
         while True:
             try:
                 parsed = await asyncio.get_running_loop().run_in_executor(
-                    None, parse_tasks_dir, PROJECT_ROOT / "tasks"
+                    None, parse_tasks_dir, tasks_dir()
                 )
                 fingerprint: list[tuple[str, str]] = []
                 for bucket in ("backlog", "current", "done"):
@@ -392,7 +397,7 @@ async def main() -> None:
                 fingerprint.sort()
                 current_hash = hash(tuple(fingerprint))
                 if first or current_hash != last_hash:
-                    await comm_server.push_tasks_to_ui(PROJECT_ROOT / "tasks")
+                    await comm_server.push_tasks_to_ui(tasks_dir())
                     last_hash = current_hash
                     first = False
             except Exception:
@@ -405,7 +410,7 @@ async def main() -> None:
         while True:
             await asyncio.sleep(30.0)
             try:
-                new_files = await scan_and_record_handoff(PROJECT_ROOT)
+                new_files = await scan_and_record_handoff(project_root)
                 if new_files:
                     await comm_client.handoff_event(new_files)
             except Exception:

@@ -11,7 +11,8 @@ from typing import Any, Awaitable, Callable
 
 import duckdb
 
-DEFAULT_DB_PATH = Path(".claudeorch/errors.duckdb")
+from core.paths import claudeorch_dir
+
 _MAX_NETWORK_RETRIES = 5
 _NETWORK_RETRY_DELAY = 30.0
 _RATE_LIMIT_SLEEP = 60.0
@@ -49,7 +50,11 @@ class ErrorContext:
 
 class ErrorHandler:
     def __init__(self, duckdb_path: Path | str | None = None) -> None:
-        self._db_path = Path(duckdb_path) if duckdb_path is not None else DEFAULT_DB_PATH
+        self._db_path = (
+            Path(duckdb_path)
+            if duckdb_path is not None
+            else claudeorch_dir() / "errors.duckdb"
+        )
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._db_lock = asyncio.Lock()
         self._retry_counts: dict[tuple[str, ErrorType], int] = {}

@@ -9,7 +9,7 @@ from typing import Any
 
 import aiosqlite
 
-DEFAULT_DB_PATH = Path(".claudeorch/checkpoints.db")
+from core.paths import claudeorch_dir
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -78,7 +78,11 @@ class Checkpoint:
 
 class CheckpointManager:
     def __init__(self, db_path: Path | str | None = None) -> None:
-        self._db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+        self._db_path = (
+            Path(db_path)
+            if db_path is not None
+            else claudeorch_dir() / "checkpoints.db"
+        )
         self._conn: aiosqlite.Connection | None = None
         self._lock = asyncio.Lock()
 

@@ -7,20 +7,20 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import aiosqlite
 import httpx
 from mcp.server.fastmcp import FastMCP
 
 from communication.client import CommunicationClient
+from core.paths import claudeorch_dir
 
 AGENT_NAME = os.environ.get("AGENT_NAME", "unknown")
 WS_URL = os.environ.get("WS_URL", "ws://localhost:8765")
 REST_URL = os.environ.get("REST_URL", "http://localhost:8766")
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_DB_PATH = _PROJECT_ROOT / ".claudeorch" / "mcp_inbox.db"
+_DB_PATH = claudeorch_dir() / "mcp_inbox.db"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (

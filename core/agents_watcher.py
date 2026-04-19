@@ -7,6 +7,8 @@ from typing import Awaitable, Callable
 
 from watchfiles import Change, awatch
 
+from core.paths import agents_dir as default_agents_dir
+
 log = logging.getLogger(__name__)
 
 _DEBOUNCE_MS = 250
@@ -49,10 +51,14 @@ def _is_md(path: str) -> bool:
 
 
 async def start(
-    project_root: Path,
+    project_root: Path | None,
     on_change: Callable[[], Awaitable[None]],
 ) -> asyncio.Task:
-    agents_dir = project_root / ".claude" / "agents"
+    agents_dir = (
+        project_root / ".claude" / "agents"
+        if project_root is not None
+        else default_agents_dir()
+    )
     stop_event = asyncio.Event()
 
     async def _runner() -> None:

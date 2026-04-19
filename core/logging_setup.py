@@ -5,7 +5,8 @@ import logging.handlers
 import os
 from pathlib import Path
 
-DEFAULT_LOG_DIR = Path(".claudeorch/logs")
+from core.paths import logs_dir
+
 DEFAULT_LOG_FILE = "orch.log"
 
 _configured = False
@@ -20,7 +21,7 @@ def configure_logging(
     if _configured:
         return
 
-    resolved_dir = Path(log_dir) if log_dir is not None else DEFAULT_LOG_DIR
+    resolved_dir = Path(log_dir) if log_dir is not None else logs_dir()
     resolved_dir.mkdir(parents=True, exist_ok=True)
 
     resolved_level = (
