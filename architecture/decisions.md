@@ -76,3 +76,41 @@
 **Что сделаю в Phase 6:** написать реальный Python-бэкенд (aiogram или python-telegram-bot long-polling), зарегистрировать `/telegram:configure` и `/telegram:access` как MCP tools у опуса, ввести `/messenger/status/{name}` REST, убрать `setUsername(null)` заглушку.
 
 **Токен** в `.claudeorch/secrets.env` (`TELEGRAM_BOT_TOKEN=...`) — валидный `8778460710:...`, используется в Phase 6 для интеграционного теста.
+
+---
+
+## 2026-04-20 — AgentSpawner vs Task tool: разделение ролей, не конкуренция
+
+**Что:** Во время Phase 2 gap-marathon'а оркестратор (opus) выбрал Claude Code Task tool с `isolation:worktree` для параллельного спауна backend-dev/frontend-dev **вместо** собственного `AgentSpawner.spawn_role()`. Решение было тихое, без записи в decision-log.
+
+**Сигнал:** если наш собственный продукт предпочитает встроенный инструмент конкурента — это провал продуктового позиционирования для текущего use case.
+
+**Честный анализ где кто выигрывает:**
+
+| Критерий | Task tool | AgentSpawner |
+|---|---|---|
+| Setup overhead | 0 | tmux + WS + MCP + DuckDB |
+| Worktree isolation | из коробки | надо руками |
+| Windows без WSL | ✔ | ✗ (tmux) |
+| One-shot parallel burst | ✔ | ✗ (тяжёлая инфра) |
+| Long-lived (hours/days) | ✗ (умирает) | ✔ |
+| Persistent identity / memory | ✗ | ✔ |
+| External triggers (Telegram/UI → запущенный агент) | ✗ | ✔ |
+| Cross-agent messaging | ✗ (изолированы) | ✔ (MCP `send_message`) |
+| Human-in-the-loop (наблюдать + вмешаться) | ✗ (invisible) | ✔ (tmux pane) |
+| Watchdog / recovery | ✗ | ✔ |
+
+**Вывод для продукта:**
+Groft — **не оркестратор параллельных задач**. На этом поле Task tool объективно лучше. Groft — **команда долгоживущих AI-товарищей с identity, memory, наблюдаемой работой и внешними каналами коммуникации**. Parallel burst-fix'ы делаются Task tool'ом **внутри** живых AgentSpawner-агентов.
+
+**Конкретные следствия, которые запись в CLAUDE.md уже отражает:**
+1. One-shot parallel file-burst → Task tool (опционально — внутри живого AgentSpawner-агента как делегация)
+2. Long-lived teammate с накапливаемой памятью и внешним каналом → AgentSpawner
+3. UI выделяет уникальные фичи: `chat-with-backend-dev-via-Telegram`, `watch-agent-live-in-tmux`, `persistent-memory-view`
+4. Не вкладываться в burst-parallelism на AgentSpawner'е — это проигранная битва
+5. Phase 2 gap-marathon валидно сделан через Task tool; decision зафиксирован постфактум здесь
+
+**Action items (вне текущих фаз):**
+- Phase 8 (decision log) — must-have, чтобы такие решения не оставались тихими
+- Repositioning в README/docs: «AI teammates you chat with», а не «yet another subagent spawner»
+- Аудит `memory/*.md` — использует ли опус реально persistent memory или обнуляет при каждой задаче

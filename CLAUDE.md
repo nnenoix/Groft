@@ -118,6 +118,31 @@ CLAUDE.md и memory файлы передавай всегда первыми в
 AgentSpawner. Opus координирует через WebSocket сервер и файловую систему.
 Каждый исполнитель имеет свой AGENT_NAME и WS соединение.
 
+### Когда использовать AgentSpawner, а когда — Claude Code Task tool
+
+Это два разных инструмента для разных задач. **Не конкурируют, делят зоны ответственности.**
+
+**AgentSpawner (tmux + WS + MCP) — для long-lived teammates:**
+- Агент живёт часами/днями, накапливает `memory/{agent}.md`, сохраняет identity между сессиями
+- Пользователь наблюдает работу в tmux, может вмешаться вручную
+- Внешние триггеры (UI/Telegram/Webhook) шлют задачу уже запущенному агенту
+- Агенты общаются между собой через MCP `send_message`/`broadcast`
+- Watchdog, recovery, checkpoints — вся инфраструктура надёжности
+- Use cases: «backend-dev постоянно доступен», «спросить frontend-dev через Telegram», «team chat между агентами»
+
+**Task tool (isolation:worktree) — для one-shot burst parallelism:**
+- Короткая изолированная задача: «пофиксить N файлов параллельно»
+- Zero infrastructure, auto-cleanup, worktree isolation из коробки
+- Никакого state между вызовами, агент умирает после задачи
+- Use cases: «Phase 2 gap-marathon», «audit кодбейсы 5-ю агентами разом», «параллельный refactor по модулям»
+
+**Правило:**
+- Если задача one-shot и выиграет от параллельности → Task tool **ВНУТРИ** живого AgentSpawner-агента (например opus делегирует sub-задачу frontend-dev'у-в-tmux, тот внутри спаунит 3 Task-subagent'а на файлы)
+- Если нужна постоянная идентичность, человеческий контроль, внешние триггеры → AgentSpawner
+- Если сомневаешься → сначала Task tool (дешевле), эскалируй в AgentSpawner только если нужна persistence
+
+**Не пытаться конкурировать AgentSpawner'ом с Task tool на его поле** — это провал по накладным расходам. AgentSpawner ценен уникальными возможностями, а не дублированием.
+
 ## Структура проекта
 - architecture/ — ТЗ, решения, граф зависимостей
 - memory/ — память каждого агента
