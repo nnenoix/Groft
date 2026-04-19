@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,61 @@ log = logging.getLogger(__name__)
 SNAPSHOT_SINK_AGENT = "opus"
 # UI client (viewer) receives parallel forwards of snapshot+status; silent skip if not connected
 UI_SINK_AGENT = "ui"
+
+# Telegram pairing nonce lifetime (seconds). 5 minutes matches typical 2FA UX
+# and is short enough that a leaked code has limited blast radius.
+TELEGRAM_PAIR_TTL = 300.0
+# Alphabet for pairing codes — digits + uppercase letters, minus easily
+# confused glyphs (0/O, 1/I). 6 chars = ~32 bits of entropy, enough to resist
+# accidental guesses over a 5-minute window.
+_TELEGRAM_PAIR_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+TELEGRAM_PAIR_CODE_LEN = 6
+# Bot token wire format validation — same regex as TelegramBridge uses
+# internally so bad input never reaches the Telegram API.
+_TELEGRAM_TOKEN_RE = re.compile(r"^[0-9]+:[A-Za-z0-9_-]+$")
+
+
+def _monotonic_now() -> float:
+    """Default clock source for pairing timestamps. Monotonic so clock skew
+    can't expire a freshly created nonce."""
+    import time
+
+    return time.monotonic()
+
+
+def _generate_pair_code() -> str:
+    """Cryptographically-strong pairing nonce from a reduced alphabet."""
+    import secrets
+
+    return "".join(
+        secrets.choice(_TELEGRAM_PAIR_ALPHABET) for _ in range(TELEGRAM_PAIR_CODE_LEN)
+    )
+
+
+def _telegram_state_path() -> Path:
+    """On-disk home for persisted Telegram config. Parent is auto-created."""
+    return claudeorch_dir() / "messenger-telegram.json"
+
+
+def _read_telegram_state() -> dict[str, Any]:
+    """Load persisted Telegram state; empty dict on missing/malformed file."""
+    path = _telegram_state_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        log.warning("messenger-telegram.json unreadable", exc_info=True)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_telegram_state(data: dict[str, Any]) -> None:
+    """Atomic-ish write — we tolerate partial writes because the file is
+    regenerable (user re-runs configure/pair). Parent dir via claudeorch_dir."""
+    path = _telegram_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -93,6 +149,12 @@ class CommunicationServer:
         self._shutdown_callback: Callable[[], Awaitable[None]] | None = None
         self._usage_task: asyncio.Task[None] | None = None
         self._started = False
+        # Telegram pairing nonces live in-process: {code: loop-time-seconds}.
+        # TTL is enforced on consume (see TELEGRAM_PAIR_TTL). Lost on restart
+        # by design — operator just requests a fresh code from the UI.
+        self._telegram_pairs: dict[str, float] = {}
+        # monkeypatchable clock source so tests can fast-forward without sleeps.
+        self._telegram_clock: Callable[[], float] = _monotonic_now
         # orchestrator is optional so unit tests (and the shutdown-only path)
         # can construct a server without the full spawner graph. Endpoints
         # that depend on it return 503 when it's None.
@@ -254,6 +316,124 @@ class CommunicationServer:
             tracker = UsageTracker()
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, tracker.compute)
+
+        @app.post("/messenger/telegram/configure")
+        async def telegram_configure(request: Request) -> JSONResponse:
+            # Parse + format-validate before touching the network so a
+            # malformed token never leaks into the getMe probe.
+            try:
+                body = await request.json()
+            except Exception:
+                return JSONResponse(
+                    {"ok": False, "error": "invalid json body"}, status_code=400
+                )
+            if not isinstance(body, dict):
+                return JSONResponse(
+                    {"ok": False, "error": "body must be an object"},
+                    status_code=400,
+                )
+            token = body.get("token")
+            if not isinstance(token, str) or not _TELEGRAM_TOKEN_RE.match(token):
+                return JSONResponse(
+                    {"ok": False, "error": "invalid token format"},
+                    status_code=400,
+                )
+            # Live probe — Telegram returns {ok: true, result: {username, ...}}
+            # on success. 5s timeout keeps the UI responsive when Telegram is
+            # unreachable.
+            import httpx
+
+            url = f"https://api.telegram.org/bot{token}/getMe"
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.get(url)
+            except Exception as exc:
+                log.warning("telegram getMe probe failed: %s", exc)
+                return JSONResponse(
+                    {"ok": False, "error": f"network error: {exc.__class__.__name__}"},
+                    status_code=400,
+                )
+            if resp.status_code != 200:
+                return JSONResponse(
+                    {"ok": False, "error": f"telegram http {resp.status_code}"},
+                    status_code=400,
+                )
+            try:
+                data = resp.json()
+            except Exception:
+                return JSONResponse(
+                    {"ok": False, "error": "invalid telegram response"},
+                    status_code=400,
+                )
+            if not isinstance(data, dict) or not data.get("ok"):
+                return JSONResponse(
+                    {"ok": False, "error": "telegram rejected token"},
+                    status_code=400,
+                )
+            result = data.get("result") or {}
+            username = (
+                result.get("username") if isinstance(result, dict) else None
+            )
+            # Persist alongside other messenger state files under .claudeorch.
+            # Preserve paired_user_id if the user re-configures after pairing.
+            loop = asyncio.get_running_loop()
+            existing = await loop.run_in_executor(None, _read_telegram_state)
+            persisted: dict[str, Any] = {
+                "token": token,
+                "username": username if isinstance(username, str) else None,
+            }
+            if isinstance(existing.get("paired_user_id"), int):
+                persisted["paired_user_id"] = existing["paired_user_id"]
+            try:
+                await loop.run_in_executor(
+                    None, _write_telegram_state, persisted
+                )
+            except Exception:
+                log.exception("failed to persist telegram config")
+                return JSONResponse(
+                    {"ok": False, "error": "persist failed"}, status_code=500
+                )
+            return JSONResponse(
+                {"ok": True, "username": persisted["username"]}
+            )
+
+        @app.post("/messenger/telegram/start-pairing")
+        async def telegram_start_pairing() -> dict[str, str]:
+            # New nonce per call. We do NOT evict previous codes here — the
+            # spec explicitly allows an old code to remain valid for the rest
+            # of its 5-minute window in case the user asked twice.
+            code = _generate_pair_code()
+            now = self._telegram_clock()
+            # Cheap GC: drop expired nonces on every issue so the dict
+            # doesn't grow unbounded if the endpoint is spammed.
+            ttl = TELEGRAM_PAIR_TTL
+            expired = [
+                c for c, t in self._telegram_pairs.items() if now - t > ttl
+            ]
+            for c in expired:
+                self._telegram_pairs.pop(c, None)
+            self._telegram_pairs[code] = now
+            return {"code": code}
+
+        @app.get("/messenger/telegram/status")
+        async def telegram_status() -> dict[str, Any]:
+            loop = asyncio.get_running_loop()
+            state = await loop.run_in_executor(None, _read_telegram_state)
+            token = state.get("token") if isinstance(state, dict) else None
+            username = state.get("username") if isinstance(state, dict) else None
+            paired = state.get("paired_user_id") if isinstance(state, dict) else None
+            # The bridge is not booted in this PR, so "connected" isn't yet
+            # a runtime state — we report "connected" once we have a token
+            # AND a paired user, "connecting" if only the token is set.
+            if isinstance(token, str) and token:
+                status = "connected" if isinstance(paired, int) else "connecting"
+            else:
+                status = "not-connected"
+            return {
+                "status": status,
+                "username": username if isinstance(username, str) else None,
+                "paired_user_id": paired if isinstance(paired, int) else None,
+            }
 
         @app.post("/agents/spawn")
         async def agents_spawn(request: Request) -> Any:

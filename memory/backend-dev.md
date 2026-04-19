@@ -97,3 +97,30 @@
 - `beautifulsoup4>=4.12` в `requirements.txt`.
 - `aiosqlite` уже в requirements.
 - `pyinstaller>=6.0` в `requirements-dev.txt`.
+- `python-telegram-bot>=21` — Telegram bridge (long-polling, лениво импортится).
+
+## core/messengers/telegram.py (Phase 6.1)
+
+- `TelegramBridge(token, orchestrator, *, allowlist=None, backend=None, state_path=None, polling_factory=None)`.
+- `is_valid_token_format(token)` — regex `^[0-9]+:[A-Za-z0-9_-]+$`. Валидация на конструкторе — `ValueError` если плохой.
+- `start()` / `stop()` идемпотентные. `polling_factory(bridge)` подменяется в тестах на `asyncio.sleep(0)` loop — PTB не импортится.
+- PTB импорт ленивый внутри `_default_polling` чтобы dep не тянулся в unit-тесты и в процесс без конфигурации Telegram.
+- `register_pairing_code(code, ts)` + `accept_pairing(code, user_id, now, ttl=300)` — single-use nonce, автоматический sweep при accept.
+- `handle_ask(agent, text)` — `orchestrator.active()` gate → `spawn_role` → `backend.list_targets()[agent]` → `backend.send_text(target, text)`.
+- Persist `paired_user_id` в `state_path` (JSON, best-effort).
+
+## communication/server.py — Telegram REST (Phase 6.1)
+
+- Module-level: `TELEGRAM_PAIR_TTL=300.0`, `TELEGRAM_PAIR_CODE_LEN=6`, `_TELEGRAM_PAIR_ALPHABET` (без 0/O/1/I), `_generate_pair_code()` через `secrets`.
+- `_telegram_state_path()` → `claudeorch_dir() / "messenger-telegram.json"`. Read/write helpers best-effort.
+- `self._telegram_pairs: dict[str, float]` (in-process, loop-monotonic time). `self._telegram_clock = _monotonic_now` — подменяемый в тестах.
+- `POST /messenger/telegram/configure`: regex-guard токен → `httpx.AsyncClient(timeout=5.0).get(https://api.telegram.org/bot<TOKEN>/getMe)` → 200+ok → persist `{token, username, paired_user_id?}`. Сохраняет `paired_user_id` при повторной конфигурации.
+- `POST /messenger/telegram/start-pairing` → `{code}`. Старые коды остаются валидны 5 мин; GC на каждом issue.
+- `GET /messenger/telegram/status` → `{status, username, paired_user_id}`. Состояния: `not-connected` (нет токена), `connecting` (есть токен, нет user_id), `connected` (и то и то).
+- Bridge polling НЕ стартует в этом PR — только validate+save.
+
+## tests/unit/test_telegram_bridge.py
+
+- `_isolate_user_data` fixture (autouse): `monkeypatch.setenv("CLAUDEORCH_USER_DATA", tmp_path)` + `paths.install_root.cache_clear() / user_data_root.cache_clear()` до и после. Без этого тесты leak'ают в реальный `.claudeorch`.
+- getMe mock: `httpx.MockTransport` + `monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)` — инжектит transport в каждый новый клиент.
+- Fake clock: `srv._telegram_clock = lambda: now[0]` + list-based counter для манипуляции.
