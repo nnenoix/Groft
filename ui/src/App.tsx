@@ -5,29 +5,14 @@ import {
   type CommandCenterState,
 } from "./components/CommandCenterLayout";
 import { CmdK } from "./components/CmdK";
-
-const TWEAK_DEFAULTS = {
-  theme: "light" as const,
-  font: "inter" as const,
-  density: "spacious" as const,
-  accent: "default" as const,
-  backdrop: "froggly" as const,
-  view: "terminals" as const,
-  gridMode: 1,
-};
+import { loadUISettings, saveUISettings } from "./hooks/useUISettings";
 
 function App() {
   const [state, setStateRaw] = useState<CommandCenterState>({
     ...INITIAL_CMD_STATE,
-    view: TWEAK_DEFAULTS.view,
-    gridMode: TWEAK_DEFAULTS.gridMode,
-    uiSettings: {
-      theme: TWEAK_DEFAULTS.theme,
-      font: TWEAK_DEFAULTS.font,
-      density: TWEAK_DEFAULTS.density,
-      accent: TWEAK_DEFAULTS.accent,
-      backdrop: TWEAK_DEFAULTS.backdrop,
-    },
+    view: "terminals",
+    gridMode: 1,
+    uiSettings: loadUISettings(),
   });
   const [cmdk, setCmdk] = useState(false);
 
@@ -41,6 +26,10 @@ function App() {
     h.dataset.density = state.uiSettings.density;
     h.dataset.accent = state.uiSettings.accent;
     h.dataset.backdrop = state.uiSettings.backdrop;
+  }, [state.uiSettings]);
+
+  useEffect(() => {
+    saveUISettings(state.uiSettings);
   }, [state.uiSettings]);
 
   useEffect(() => {
