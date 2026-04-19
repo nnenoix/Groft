@@ -153,6 +153,12 @@ class TmuxBackend:
     def forget(self, name: str) -> None:
         self._targets.pop(name, None)
 
+    async def shutdown(self) -> None:
+        # No-op: tmux windows are intentionally left running when the
+        # orchestrator exits so the user can attach and inspect. The real
+        # teardown path is spawner.despawn_all() upstream.
+        return None
+
     @staticmethod
     async def _run_tmux(args: list[str]) -> bool:
         try:

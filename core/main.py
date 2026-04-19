@@ -457,6 +457,10 @@ async def main() -> None:
     except Exception:
         log.exception("teardown step failed: spawner.despawn_all")
     try:
+        await backend.shutdown()
+    except Exception:
+        log.exception("teardown step failed: backend.shutdown")
+    try:
         await recovery_manager.shutdown()
     except Exception:
         log.exception("teardown step failed: recovery_manager.shutdown")

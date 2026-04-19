@@ -14,6 +14,21 @@
 
 ## Ключевые решения
 
+### core/process/windows_backend.py (PROCESS-BACKEND-2, PR2)
+- `WindowsBackend` — Popen-based `ProcessBackend`. Target = `"pid:{pid}"`. State: `_procs: dict[name, (Popen, log_path, log_fh)]` + `_targets`. log_dir injectable (tests).
+- Import-safety: `CREATE_NEW_CONSOLE = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)` — модуль импортируется на Linux (0 = no-op creationflag даже на Windows).
+- spawn: `open(log, "wb", buffering=0)`, `Popen(stdin=PIPE, stdout=log, stderr=STDOUT, creationflags=NEW_CONSOLE|NEW_PROCESS_GROUP)`. Весь sync-код в `asyncio.to_thread` (spawn/send_text/capture_output/kill).
+- send_text CRLF: normalise `\r\n` → `\n`, затем expand `\n` → `\r\n`. Final `\r\n` только если `press_enter=True and not text.endswith("\n")`. Python НЕ auto-translate на Windows для bytes-pipe.
+- kill double-tap: `terminate()` → `wait(timeout=5)` → на timeout `kill()`. Затем `taskkill /T /F /PID` (try/except — non-fatal, покрывает node.exe grandchildren).
+- capture_output: seek to end-64KB, decode errors="replace", `replace("\r\n","\n")` → split `\n` → last N. Возврат `""` если файла нет/пусто. O(1) по FS.
+- list_targets purge: каждый call итерирует `_procs`, `proc.poll()` → если not None, pop + close log_fh.
+- `shutdown()` — kill all alive. Добавлен в Protocol (`core/process/backend.py`). No-op в TmuxBackend (tmux-окна по дизайну переживают orch) и InMemoryBackend (tests append `("shutdown",)`).
+- `core/main.py` teardown: `await backend.shutdown()` между `spawner.despawn_all()` и `recovery_manager.shutdown()`.
+- pywinpty НЕ в requirements — known limitation: bare pipe stdin ≠ TTY, future PR с `process.windows.use_pty` config flag.
+- Factory: `select_backend({})` на Windows → WindowsBackend, `"windows"` явно → WindowsBackend (раньше NotImplementedError).
+- Smoke tests (`tests/integration/test_windows_backend.py`): `pytestmark = skipif(sys.platform != "win32")`, 3 теста (`spawn_and_kill`, `capture_output`, `factory_on_windows`). Timeout /t 2 — быстрый cleanup.
+- `start.ps1` / `stop.ps1` — PS 5.1 совместимы. `-Environment` нет в 5.1, так что env выставляется через `$env:VAR = ...` до Start-Process (child наследует). `stop.ps1` — `$ErrorActionPreference = "Continue"`, `Stop-Process -Force` с try/catch per-PID.
+
 ### core/process/* (PROCESS-BACKEND-1, PR1)
 - `ProcessBackend` Protocol (`core/process/backend.py`) — abstraction `spawn/send_text/kill/capture_output/is_alive/list_targets`. `Target = str` opaque. Callers получают Target от `spawn()` или из `backend.list_targets()`.
 - `TmuxBackend` (`core/process/tmux_backend.py`) — единственный продакшн backend. Содержит весь tmux-код: `_run_tmux`, `_tmux_send`, `capture-pane`. `send_text` хранит инвариант безопасности: split на `\n`, каждая непустая строка → `["-l", "--", line]`, между ними bare `Enter`, в конце финальный `Enter` (если `press_enter=True`). НЕ объединять в один send-keys — это injection-guard, на нём держится UI allowlist regex.
