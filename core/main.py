@@ -100,10 +100,16 @@ async def main() -> None:
     # process.backend in config.yml (default auto -> tmux on POSIX).
     backend = select_backend(raw_config)
 
+    # Build spawner/orchestrator up front so CommunicationServer can accept
+    # the orchestrator handle for its REST /agents/* endpoints.
+    spawner = AgentSpawner(str(project_root), str(config_path()), backend=backend)
+    orchestrator = Orchestrator(spawner)
+
     comm_server = CommunicationServer(
         backend=backend,
         lead_target=lead_target,
         tasks_dir=tasks_dir(),
+        orchestrator=orchestrator,
     )
     await comm_server.start()
     comm_server.set_shutdown_callback(process_guard.request_shutdown)
@@ -118,8 +124,6 @@ async def main() -> None:
     error_handler = ErrorHandler()
     git_manager = GitManager()
     memory_manager = MemoryManager()
-    spawner = AgentSpawner(str(project_root), str(config_path()), backend=backend)
-    orchestrator = Orchestrator(spawner)
 
     await checkpoint_manager.initialize()
     await error_handler.initialize()
