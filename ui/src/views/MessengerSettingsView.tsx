@@ -1,14 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "../components/icons";
-import useChannels, {
-  PAIR_CODE_RE,
-  TELEGRAM_TOKEN_RE,
-  type ChannelStatus,
-} from "../hooks/useChannels";
+import useChannels, { type ChannelStatus } from "../hooks/useChannels";
 
 type TabKey = "telegram" | "discord" | "imessage" | "webhook";
 
-type TelegramStep = 1 | 2 | 3 | 4;
+type TelegramStep = 1 | 2 | 3;
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "telegram", label: "Telegram" },
@@ -38,8 +34,7 @@ function Crumbs({ step }: { step: TelegramStep }) {
   const items: Array<{ n: TelegramStep; label: string }> = [
     { n: 1, label: "Токен" },
     { n: 2, label: "Пара" },
-    { n: 3, label: "Код" },
-    { n: 4, label: "Готово" },
+    { n: 3, label: "Готово" },
   ];
   return (
     <div className="flex items-center gap-2 mb-[var(--pad-5)]">
@@ -131,24 +126,34 @@ function TelegramFlow() {
     status,
     errorMessage,
     username,
+    pairedUserId,
+    pairingCode,
     disconnect,
     configureTelegram,
     pairTelegram,
+    startTelegramPairing,
     getTelegramStatus,
   } = useChannels();
 
   const [step, setStep] = useState<TelegramStep>(1);
   const [token, setToken] = useState("");
-  const [code, setCode] = useState("");
-  const [submitting, setSubmitting] = useState<"token" | "code" | null>(null);
+  const [submitting, setSubmitting] = useState<"token" | null>(null);
   const [probed, setProbed] = useState(false);
+  // localCode lets us render the code immediately from startTelegramPairing's
+  // resolved value even before the hook's pairingCode state re-settles on
+  // the next render.
+  const [localCode, setLocalCode] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [pairingError, setPairingError] = useState<string | null>(null);
+  const pollingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const s = await getTelegramStatus();
       if (cancelled) return;
-      if (s.status === "connected") setStep(4);
+      if (s.status === "connected") setStep(3);
+      else if (s.status === "connecting") setStep(2);
       setProbed(true);
     })();
     return () => {
@@ -156,35 +161,63 @@ function TelegramFlow() {
     };
   }, [getTelegramStatus]);
 
-  // connect()/pair() in useChannels swallow errors and surface them via
-  // status/errorMessage state. Advance/error once submit resolves and the
-  // hook's next status is known.
+  // While waiting on pairing, launch a single status-polling loop. The hook
+  // handles the 2s cadence + 2m deadline; guard with pollingRef so we never
+  // stack multiple loops on re-render.
   useEffect(() => {
-    if (submitting !== null) return;
-    if (step === 1 && status === "connecting") setStep(2);
-    if (step === 3 && status === "connected") setStep(4);
-  }, [submitting, status, step]);
+    if (step !== 2) return;
+    if (pollingRef.current) return;
+    pollingRef.current = true;
+    (async () => {
+      try {
+        await pairTelegram("");
+      } finally {
+        pollingRef.current = false;
+      }
+    })();
+  }, [step, pairTelegram]);
 
-  const tokenValid = TELEGRAM_TOKEN_RE.test(token);
-  const codeValid = PAIR_CODE_RE.test(code);
+  // status==="connected" arrives either from mount probe or from the poll
+  // started on step 2 — either way, surface the success card.
+  useEffect(() => {
+    if (status === "connected" && step !== 3) setStep(3);
+  }, [status, step]);
+
+  const tokenValid = token.trim().length >= 20 && !/\s/.test(token.trim());
 
   async function onSubmitToken() {
     if (!tokenValid || submitting) return;
     setSubmitting("token");
+    setPairingError(null);
     try {
-      await configureTelegram(token);
+      await configureTelegram(token.trim());
+      // configureTelegram sets status to "connecting" on success. If it
+      // failed, status is "error" and errorMessage holds the reason.
+      // Kick the pairing-code issue before switching to step 2 so the
+      // user sees the code immediately.
+      try {
+        const issued = await startTelegramPairing();
+        setLocalCode(issued);
+        setStep(2);
+      } catch (e) {
+        setPairingError(
+          e instanceof Error ? e.message : "Failed to issue pairing code",
+        );
+      }
     } finally {
       setSubmitting(null);
     }
   }
 
-  async function onSubmitCode() {
-    if (!codeValid || submitting) return;
-    setSubmitting("code");
+  async function onCopyCode() {
+    const value = pairingCode ?? localCode;
+    if (!value) return;
     try {
-      await pairTelegram(code);
-    } finally {
-      setSubmitting(null);
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      /* clipboard unavailable — show no feedback rather than a scary error */
     }
   }
 
@@ -192,11 +225,13 @@ function TelegramFlow() {
     if (!window.confirm("Отключить Telegram-канал?")) return;
     await disconnect();
     setToken("");
-    setCode("");
+    setLocalCode(null);
     setStep(1);
   }
 
-  const bannerError = status === "error" ? errorMessage : null;
+  const bannerError =
+    pairingError ?? (status === "error" ? errorMessage : null);
+  const visibleCode = pairingCode ?? localCode;
 
   if (!probed) {
     return (
@@ -242,8 +277,8 @@ function TelegramFlow() {
               className="block mt-1.5 text-[11.5px]"
               style={{ color: "var(--text-muted)" }}
             >
-              Формат: <code>&lt;id&gt;:&lt;secret&gt;</code>, только латиница,
-              цифры и <code>_ -</code>.
+              Минимум 20 символов, без пробелов. Формат проверит сам Telegram
+              через <code>getMe</code>.
             </span>
           </label>
           <div className="mt-[var(--pad-4)] flex items-center gap-2">
@@ -266,7 +301,7 @@ function TelegramFlow() {
                 className="text-[11.5px]"
                 style={{ color: "var(--status-stuck)" }}
               >
-                Неверный формат токена
+                Слишком короткий токен
               </span>
             )}
           </div>
@@ -275,80 +310,61 @@ function TelegramFlow() {
       )}
 
       {step === 2 && (
-        <StepCard title="Шаг 2 — Парный код">
+        <StepCard
+          title="Шаг 2 — Парный код"
+          desc={
+            username
+              ? `Открой Telegram, найди бота @${username} и отправь ему /pair <код>.`
+              : "Открой Telegram, найди своего бота и отправь ему /pair <код>."
+          }
+        >
           <div
-            className="rounded-md p-3 text-[12.5px]"
+            className="rounded-[var(--radius-md)] px-[var(--pad-4)] py-[var(--pad-5)] flex items-center justify-between gap-[var(--pad-4)]"
             style={{
               background: "var(--accent-light)",
-              color: "var(--accent-hover)",
               border: "1px solid var(--accent-primary)",
             }}
           >
-            Напиши боту <code>/start</code>, он пришлёт код подтверждения.
+            <div
+              className="font-mono tracking-[0.28em] text-[26px] font-semibold select-all"
+              style={{ color: "var(--accent-hover)" }}
+            >
+              {visibleCode ?? "—"}
+            </div>
+            <button
+              onClick={onCopyCode}
+              disabled={!visibleCode}
+              className="btn btn-ghost text-[12.5px]"
+              style={{
+                opacity: visibleCode ? 1 : 0.5,
+                cursor: visibleCode ? "pointer" : "not-allowed",
+              }}
+            >
+              {copied ? "Скопировано" : "Скопировать"}
+            </button>
+          </div>
+          <div
+            className="mt-[var(--pad-4)] text-[12.5px]"
+            style={{ color: "var(--text-muted)" }}
+          >
+            В Telegram отправь боту команду:{" "}
+            <code>/pair {visibleCode ?? "<код>"}</code>.
           </div>
           <div className="mt-[var(--pad-4)] flex items-center gap-2">
-            <button
-              onClick={() => setStep(3)}
-              className="btn btn-primary text-[12.5px]"
+            <div
+              className="text-[12.5px] flex items-center gap-2"
+              style={{ color: "var(--text-muted)" }}
             >
-              Далее
-            </button>
+              <span
+                className="inline-block w-3 h-3 rounded-full animate-pulse"
+                style={{ background: "var(--accent-primary)" }}
+              />
+              Ждём подтверждения от Telegram…
+            </div>
+          </div>
+          <div className="mt-[var(--pad-4)] flex items-center gap-2">
             <button
               onClick={() => setStep(1)}
-              className="btn btn-ghost text-[12.5px]"
-            >
-              Назад
-            </button>
-          </div>
-        </StepCard>
-      )}
-
-      {step === 3 && (
-        <StepCard title="Шаг 3 — Код подтверждения">
-          <label className="block">
-            <span
-              className="text-[11px] uppercase tracking-[0.16em] font-semibold"
-              style={{ color: "var(--text-muted)" }}
-            >
-              Код подтверждения
-            </span>
-            <input
-              type="text"
-              autoComplete="off"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="ABC123"
-              className="mt-1.5 w-full px-3 py-2 rounded-md text-[13px] font-mono focus:outline-none"
-              style={{
-                background: "var(--bg-secondary)",
-                border: "1px solid var(--border)",
-                color: "var(--text-primary)",
-              }}
-            />
-            <span
-              className="block mt-1.5 text-[11.5px]"
-              style={{ color: "var(--text-muted)" }}
-            >
-              4–32 символа: буквы, цифры, <code>_ -</code>.
-            </span>
-          </label>
-          <div className="mt-[var(--pad-4)] flex items-center gap-2">
-            <button
-              onClick={onSubmitCode}
-              disabled={!codeValid || submitting !== null}
-              className="btn btn-primary text-[12.5px]"
-              style={{
-                opacity: !codeValid || submitting !== null ? 0.5 : 1,
-                cursor:
-                  !codeValid || submitting !== null
-                    ? "not-allowed"
-                    : "pointer",
-              }}
-            >
-              {submitting === "code" ? "Проверяем…" : "Подтвердить"}
-            </button>
-            <button
-              onClick={() => setStep(2)}
               className="btn btn-ghost text-[12.5px]"
             >
               Назад
@@ -358,8 +374,8 @@ function TelegramFlow() {
         </StepCard>
       )}
 
-      {step === 4 && (
-        <StepCard title="Шаг 4 — Статус канала">
+      {step === 3 && (
+        <StepCard title="Шаг 3 — Готово">
           {status === "error" ? (
             <div
               className="text-[13px]"
@@ -369,10 +385,20 @@ function TelegramFlow() {
               Ошибка — {errorMessage ?? "канал недоступен"}
             </div>
           ) : (
-            <div className="text-[13px]">
-              <StatusDot status="connected" />
-              {username ? `Подключён · ${username}` : "Подключён"}
-            </div>
+            <>
+              <div className="text-[13px]">
+                <StatusDot status="connected" />
+                {username ? `Подключён как бот @${username}` : "Подключён"}
+              </div>
+              {pairedUserId !== null && (
+                <div
+                  className="text-[12.5px] mt-1"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  Спарен с пользователем id {pairedUserId}
+                </div>
+              )}
+            </>
           )}
           <div className="mt-[var(--pad-4)]">
             <button
