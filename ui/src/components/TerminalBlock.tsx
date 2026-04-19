@@ -10,6 +10,7 @@ interface TerminalBlockProps {
   expandable?: boolean;
   expanded?: boolean;
   onToggle?: () => void;
+  onClear?: () => void;
   heightClass?: string;
 }
 
@@ -20,6 +21,7 @@ export function TerminalBlock({
   expandable = true,
   expanded,
   onToggle,
+  onClear,
   heightClass = "h-48",
 }: TerminalBlockProps) {
   const color = STATUS_COLOR[agent.status] ?? "var(--text-dim)";
@@ -38,6 +40,25 @@ export function TerminalBlock({
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 6;
     if (!atBottom && autoscroll) setAutoscroll(false);
     else if (atBottom && !autoscroll) setAutoscroll(true);
+  }
+
+  function copyOutput(e: React.MouseEvent) {
+    e.stopPropagation();
+    const text = lines.join("\n");
+    // navigator.clipboard is async and can fail (missing permission, non-secure
+    // context). Swallow — the user can retry; no UI toast framework yet.
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.clipboard &&
+      typeof navigator.clipboard.writeText === "function"
+    ) {
+      void navigator.clipboard.writeText(text).catch(() => {});
+    }
+  }
+
+  function clearOutput(e: React.MouseEvent) {
+    e.stopPropagation();
+    onClear?.();
   }
 
   return (
@@ -83,17 +104,19 @@ export function TerminalBlock({
         <button
           className="btn btn-ghost text-[11px] !px-1.5 !py-1"
           title="Скопировать вывод"
-          onClick={(e) => e.stopPropagation()}
+          onClick={copyOutput}
         >
           <Icon.Copy size={12} />
         </button>
-        <button
-          className="btn btn-ghost text-[11px] !px-1.5 !py-1"
-          title="Очистить"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Icon.Trash size={12} />
-        </button>
+        {onClear && (
+          <button
+            className="btn btn-ghost text-[11px] !px-1.5 !py-1"
+            title="Очистить"
+            onClick={clearOutput}
+          >
+            <Icon.Trash size={12} />
+          </button>
+        )}
         {expandable && (
           <button
             onClick={onToggle}
