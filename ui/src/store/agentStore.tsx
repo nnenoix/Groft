@@ -33,7 +33,7 @@ export interface AgentState {
   model: string;
   terminalOutput: string[];
   avatar?: string;
-  mode?: "solo" | "team";
+  mode?: "solo" | "team" | "review";
   uptime?: string;
   cycles?: number;
   tokensIn?: number;
@@ -68,7 +68,7 @@ export type Action =
       currentAction?: string;
       currentTask?: string;
       model?: string;
-      mode?: "solo" | "team";
+      mode?: "solo" | "team" | "review";
       uptime?: string;
       cycles?: number;
       tokensIn?: number;
