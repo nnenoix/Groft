@@ -24,6 +24,7 @@ from core.logging_setup import configure_logging
 from core.orchestrator import Orchestrator
 from core.paths import (
     architecture_dir,
+    claudeorch_dir,
     config_path,
     logs_dir,
     tasks_dir,
@@ -81,6 +82,62 @@ def _load_runtime_config(path: Path) -> tuple[dict[str, Any], str, dict[str, str
     return data, lead, agent_targets
 
 
+async def _maybe_start_telegram_bridge(
+    orchestrator: Orchestrator,
+    backend: Any,
+) -> Any | None:
+    """Construct + start a TelegramBridge if on-disk config is present.
+
+    Returns the live bridge handle on success, or None when no config exists,
+    the token is malformed, python-telegram-bot isn't installed, or bridge
+    startup itself fails. All failure modes log but never propagate — the
+    orchestrator must keep booting.
+    """
+    state_path = claudeorch_dir() / "messenger-telegram.json"
+    try:
+        # Lazy import so the messengers package isn't dragged into smoke runs
+        # that don't need it. Module-level import would be fine too — this is
+        # just defensive in case the package gains heavier deps later.
+        from core.messengers.telegram import (
+            TelegramBridge,
+            is_valid_token_format,
+            read_state_file,
+        )
+    except Exception:
+        log.warning("telegram bridge module unavailable", exc_info=True)
+        return None
+    state = read_state_file(state_path)
+    token = state.get("token")
+    if not isinstance(token, str) or not is_valid_token_format(token):
+        # Silent return — most deployments never configure Telegram.
+        return None
+    allowlist: set[int] = set()
+    paired = state.get("paired_user_id")
+    if isinstance(paired, int):
+        allowlist.add(paired)
+    try:
+        bridge = TelegramBridge(
+            token,
+            orchestrator,
+            allowlist=allowlist,
+            backend=backend,
+            state_path=state_path,
+        )
+    except ValueError:
+        log.warning("telegram bridge rejected on-disk token as malformed")
+        return None
+    except Exception:
+        log.exception("telegram bridge construction failed")
+        return None
+    try:
+        await bridge.start()
+    except Exception:
+        log.exception("telegram bridge start failed")
+        return None
+    log.info("telegram bridge started (paired=%s)", paired)
+    return bridge
+
+
 async def main() -> None:
     project_root = user_data_root()
     configure_logging(log_dir=logs_dir())
@@ -104,6 +161,12 @@ async def main() -> None:
     # the orchestrator handle for its REST /agents/* endpoints.
     spawner = AgentSpawner(str(project_root), str(config_path()), backend=backend)
     orchestrator = Orchestrator(spawner)
+
+    # Optional Telegram bridge: boots only if the operator has completed the
+    # configure-then-pair flow (UI writes .claudeorch/messenger-telegram.json).
+    # A missing python-telegram-bot dep degrades to a warning — the rest of
+    # the orchestrator runs unchanged.
+    telegram_bridge = await _maybe_start_telegram_bridge(orchestrator, backend)
 
     comm_server = CommunicationServer(
         backend=backend,
@@ -465,6 +528,11 @@ async def main() -> None:
             pass
         except Exception:
             log.exception("teardown step failed: await bg_task")
+    if telegram_bridge is not None:
+        try:
+            await telegram_bridge.stop()
+        except Exception:
+            log.exception("teardown step failed: telegram_bridge.stop")
     try:
         await spawner.despawn_all()
     except Exception:
