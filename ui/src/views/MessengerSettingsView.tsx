@@ -429,6 +429,234 @@ function StubPanel({ title, note }: { title: string; note: string }) {
   );
 }
 
+// Default template is the minimal JSON shape with all three tokens.
+// Gives the operator a working example; they can trim/rearrange for
+// their own endpoint before hitting Save.
+const DEFAULT_WEBHOOK_TEMPLATE =
+  '{"event":"{event}","from":"{agent}","content":"{text}"}';
+
+function WebhookPanel() {
+  const { configureWebhook, testWebhookLive, getWebhookStatus } = useChannels();
+
+  const [url, setUrl] = useState("");
+  const [secret, setSecret] = useState("");
+  const [template, setTemplate] = useState(DEFAULT_WEBHOOK_TEMPLATE);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  // Last result from /test — displayed as a banner until the next action.
+  const [testResult, setTestResult] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [status, setStatus] = useState<"not-connected" | "connected">(
+    "not-connected",
+  );
+
+  useEffect(() => {
+    // Hydrate from saved config on mount so the user sees their existing
+    // URL (secret intentionally NOT prefilled — we never round-trip it to
+    // the frontend; operator retypes if they want to change it).
+    let cancelled = false;
+    (async () => {
+      const s = await getWebhookStatus();
+      if (cancelled) return;
+      if (s.url) setUrl(s.url);
+      setStatus(s.status === "connected" ? "connected" : "not-connected");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [getWebhookStatus]);
+
+  async function onSave() {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    setTestResult(null);
+    try {
+      await configureWebhook({ url: url.trim(), secret, template });
+      setStatus("connected");
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onTest() {
+    if (testing) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testWebhookLive();
+      if (result.ok) {
+        setTestResult({
+          kind: "success",
+          message: `Delivered (HTTP ${result.status ?? "2xx"})`,
+        });
+      } else {
+        setTestResult({
+          kind: "error",
+          message:
+            result.error ??
+            (result.status ? `HTTP ${result.status}` : "Test failed"),
+        });
+      }
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  const canSave =
+    url.trim().length > 0 && template.trim().length > 0 && !saving;
+
+  return (
+    <StepCard
+      title="Webhook"
+      desc="Groft будет отправлять POST на указанный URL. Шаблон подставляет {event}, {agent}, {text}."
+    >
+      <label className="block mb-[var(--pad-3)]">
+        <span
+          className="text-[11px] uppercase tracking-[0.16em] font-semibold"
+          style={{ color: "var(--text-muted)" }}
+        >
+          URL
+        </span>
+        <input
+          type="text"
+          autoComplete="off"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://hooks.example.com/abc123"
+          className="mt-1.5 w-full px-3 py-2 rounded-md text-[13px] font-mono focus:outline-none"
+          style={{
+            background: "var(--bg-secondary)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+          }}
+        />
+      </label>
+
+      <label className="block mb-[var(--pad-3)]">
+        <span
+          className="text-[11px] uppercase tracking-[0.16em] font-semibold"
+          style={{ color: "var(--text-muted)" }}
+        >
+          Shared secret
+        </span>
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={secret}
+          onChange={(e) => setSecret(e.target.value)}
+          placeholder="•••"
+          className="mt-1.5 w-full px-3 py-2 rounded-md text-[13px] font-mono focus:outline-none"
+          style={{
+            background: "var(--bg-secondary)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+          }}
+        />
+        <span
+          className="block mt-1.5 text-[11.5px]"
+          style={{ color: "var(--text-muted)" }}
+        >
+          Отправляется в заголовке <code>X-Webhook-Secret</code>. Не
+          возвращается назад в UI.
+        </span>
+      </label>
+
+      <label className="block mb-[var(--pad-3)]">
+        <span
+          className="text-[11px] uppercase tracking-[0.16em] font-semibold"
+          style={{ color: "var(--text-muted)" }}
+        >
+          JSON template
+        </span>
+        <textarea
+          value={template}
+          onChange={(e) => setTemplate(e.target.value)}
+          rows={5}
+          spellCheck={false}
+          className="mt-1.5 w-full px-3 py-2 rounded-md text-[13px] font-mono focus:outline-none"
+          style={{
+            background: "var(--bg-secondary)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+            resize: "vertical",
+          }}
+        />
+        <span
+          className="block mt-1.5 text-[11.5px]"
+          style={{ color: "var(--text-muted)" }}
+        >
+          Доступные токены: <code>{"{event}"}</code>, <code>{"{agent}"}</code>,{" "}
+          <code>{"{text}"}</code>. Результат должен быть валидным JSON.
+        </span>
+      </label>
+
+      <div className="mt-[var(--pad-4)] flex items-center gap-2">
+        <button
+          onClick={onSave}
+          disabled={!canSave}
+          className="btn btn-primary text-[12.5px]"
+          style={{
+            opacity: canSave ? 1 : 0.5,
+            cursor: canSave ? "pointer" : "not-allowed",
+          }}
+        >
+          {saving ? "Сохраняем…" : "Сохранить"}
+        </button>
+        <button
+          onClick={onTest}
+          disabled={testing || status !== "connected"}
+          className="btn btn-ghost text-[12.5px]"
+          style={{
+            opacity: testing || status !== "connected" ? 0.5 : 1,
+            cursor:
+              testing || status !== "connected" ? "not-allowed" : "pointer",
+          }}
+          title={
+            status === "connected"
+              ? "Отправить пробный POST"
+              : "Сначала сохрани конфигурацию"
+          }
+        >
+          {testing ? "Отправляем…" : "Test"}
+        </button>
+        {status === "connected" && (
+          <span
+            className="text-[11.5px] ml-2"
+            style={{ color: "var(--text-muted)" }}
+          >
+            <StatusDot status="connected" />
+            Настроено
+          </span>
+        )}
+      </div>
+
+      {saveError && <ErrorBanner message={saveError} />}
+
+      {testResult && testResult.kind === "success" && (
+        <div
+          className="mt-[var(--pad-3)] px-3 py-2 rounded-md text-[12px]"
+          style={{
+            background: "var(--tint-success, var(--bg-secondary))",
+            border: "1px solid var(--status-active)",
+            color: "var(--status-active)",
+          }}
+        >
+          ✓ {testResult.message}
+        </div>
+      )}
+      {testResult && testResult.kind === "error" && (
+        <ErrorBanner message={testResult.message} />
+      )}
+    </StepCard>
+  );
+}
+
 export function MessengerSettingsView() {
   const [tab, setTab] = useState<TabKey>("telegram");
 
@@ -497,12 +725,7 @@ export function MessengerSettingsView() {
             note="Скоро — требуется локальный macOS-bridge."
           />
         )}
-        {tab === "webhook" && (
-          <StubPanel
-            title="Webhook"
-            note="Доступен в старых «Настройках» — перенос в мастер запланирован."
-          />
-        )}
+        {tab === "webhook" && <WebhookPanel />}
       </div>
     </div>
   );
