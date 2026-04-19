@@ -11,3 +11,6 @@ ui/.claude/
 node_modules/
 .env
 ork-handoff/
+dist/
+build/
+*.spec.bak

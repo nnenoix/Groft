@@ -84,6 +84,9 @@ def _load_runtime_config(path: Path) -> tuple[dict[str, Any], str, dict[str, str
 async def main() -> None:
     project_root = user_data_root()
     configure_logging(log_dir=logs_dir())
+    if "--smoke" in sys.argv:
+        log.info("smoke ok")
+        return
     raw_config, lead_target, agent_targets = _load_runtime_config(config_path())
 
     # install signal handlers before anything binds ports / opens files so a
