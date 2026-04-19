@@ -54,10 +54,23 @@ export interface Tasks {
   done: Task[];
 }
 
+export interface UsageWindow {
+  inputTokens: number;
+  outputTokens: number;
+  total: number;
+  resetAt: string;
+}
+
+export interface UsageWindows {
+  rolling_5h: UsageWindow | null;
+  weekly: UsageWindow | null;
+}
+
 export interface StoreState {
   agents: AgentState[];
   logs: LogEntry[];
   tasks: Tasks;
+  usage: UsageWindows;
 }
 
 export type Action =
@@ -84,6 +97,11 @@ export type Action =
       backlog?: Task[];
       current?: Task[];
       done?: Task[];
+    }
+  | {
+      type: "SET_USAGE_WINDOWS";
+      rolling_5h: UsageWindow | null;
+      weekly: UsageWindow | null;
     };
 
 /* ------------------------------------------------------------------ */
@@ -104,10 +122,16 @@ const INITIAL_TASKS: Tasks = {
   done: [],
 };
 
+const INITIAL_USAGE: UsageWindows = {
+  rolling_5h: null,
+  weekly: null,
+};
+
 const INITIAL_STATE: StoreState = {
   agents: [],
   logs: [],
   tasks: INITIAL_TASKS,
+  usage: INITIAL_USAGE,
 };
 
 /* ------------------------------------------------------------------ */
@@ -236,6 +260,15 @@ function reducer(state: StoreState, action: Action): StoreState {
       };
       return { ...state, tasks: nextTasks };
     }
+    case "SET_USAGE_WINDOWS": {
+      return {
+        ...state,
+        usage: {
+          rolling_5h: action.rolling_5h,
+          weekly: action.weekly,
+        },
+      };
+    }
   }
 }
 
@@ -276,6 +309,10 @@ export function useLogs(): LogEntry[] {
 
 export function useTasks(): Tasks {
   return useStore().state.tasks;
+}
+
+export function useUsage(): UsageWindows {
+  return useStore().state.usage;
 }
 
 export function useDispatch(): Dispatch<Action> {
