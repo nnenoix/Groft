@@ -18,6 +18,12 @@ export interface TelegramStatusSnapshot {
   pairedUserId: number | null;
 }
 
+export interface DiscordStatusSnapshot {
+  status: ChannelStatus;
+  botUser: string | null;
+  pairedUserId: number | null;
+}
+
 export interface WebhookConfig {
   url: string;
   secret: string;
@@ -57,6 +63,9 @@ export interface UseChannelsResult {
   pairTelegram: (code: string) => Promise<void>;
   getTelegramStatus: () => Promise<TelegramStatusSnapshot>;
   startTelegramPairing: () => Promise<string>;
+  configureDiscord: (token: string) => Promise<void>;
+  startDiscordPairing: () => Promise<string>;
+  getDiscordStatus: () => Promise<DiscordStatusSnapshot>;
 }
 
 function toChannelStatus(raw: string): ChannelStatus {
@@ -163,14 +172,33 @@ function useChannels(): UseChannelsResult {
           );
           // Stay in "connecting" — the user still has to pair via code.
         } else if (m === "discord") {
-          const token = config.token ?? "";
+          const token = (config.token ?? "").trim();
           if (!DISCORD_TOKEN_RE.test(token)) {
             throw new Error("Invalid Discord bot token format");
           }
-          await invoke<string>("run_tmux_command", {
-            command: `/discord:configure ${token}`,
-          });
-          setStatus("connected");
+          // POST to the real REST endpoint — same shape as Telegram's
+          // configure. The backend only does a format check (discord.py
+          // can't cheaply probe a token without a gateway connect), so
+          // a 200 here just means "token shape is valid and persisted".
+          const resp = await fetch(
+            "http://localhost:8766/messenger/discord/configure",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ token }),
+            },
+          );
+          let body: { ok?: boolean; error?: string };
+          try {
+            body = await resp.json();
+          } catch {
+            throw new Error(`HTTP ${resp.status}`);
+          }
+          if (!resp.ok || !body.ok) {
+            throw new Error(body.error || `HTTP ${resp.status}`);
+          }
+          // Stay in "connecting" — pairing still has to happen via
+          // /pair in the Discord server.
         } else {
           setStatus("connected");
         }
@@ -408,6 +436,74 @@ function useChannels(): UseChannelsResult {
     return body.code;
   }, []);
 
+  // Discord configure — token-only, no live probe on the backend side.
+  // Mirrors configureTelegram's shape so panel code can treat the two
+  // channels symmetrically.
+  const configureDiscord = useCallback(
+    (token: string) => connect("discord", { token }),
+    [connect],
+  );
+
+  // One-shot Discord pairing-code issuer. Separate store from Telegram's
+  // on both the client (this hook) and server (see _discord_pairs),
+  // so codes never cross-leak.
+  const startDiscordPairing = useCallback(async (): Promise<string> => {
+    const resp = await fetch(
+      "http://localhost:8766/messenger/discord/start-pairing",
+      { method: "POST" },
+    );
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const body = (await resp.json()) as { code?: string };
+    if (typeof body.code !== "string" || body.code.length === 0) {
+      throw new Error("Invalid pairing response");
+    }
+    setPairingCode(body.code);
+    return body.code;
+  }, []);
+
+  const getDiscordStatus =
+    useCallback(async (): Promise<DiscordStatusSnapshot> => {
+      const empty: DiscordStatusSnapshot = {
+        status: "not-connected",
+        botUser: null,
+        pairedUserId: null,
+      };
+      try {
+        const resp = await fetch(
+          "http://localhost:8766/messenger/discord/status",
+        );
+        if (!resp.ok) return empty;
+        const body = (await resp.json()) as {
+          status?: string;
+          bot_user?: string | null;
+          paired_user_id?: number | null;
+        };
+        const mapped = toChannelStatus(body.status ?? "");
+        const nextBotUser =
+          typeof body.bot_user === "string" ? body.bot_user : null;
+        const nextPaired =
+          typeof body.paired_user_id === "number"
+            ? body.paired_user_id
+            : null;
+        // We don't overwrite the shared status/username state here — a
+        // Discord panel can be mounted alongside Telegram, and clobbering
+        // the top-level hook state would cause cross-tab flicker. Panels
+        // that want to track Discord status locally should use the
+        // returned snapshot directly.
+        setPairedUserId(nextPaired);
+        return {
+          status: mapped,
+          botUser: nextBotUser,
+          pairedUserId: nextPaired,
+        };
+      } catch (err) {
+        log.info("discord status unavailable", err);
+        return empty;
+      }
+    }, []);
+
   return {
     current,
     status,
@@ -426,6 +522,9 @@ function useChannels(): UseChannelsResult {
     pairTelegram,
     getTelegramStatus,
     startTelegramPairing,
+    configureDiscord,
+    startDiscordPairing,
+    getDiscordStatus,
   };
 }
 
