@@ -200,6 +200,50 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE SEQUENCE IF NOT EXISTS messages_id_seq;
 """
 
+# tmux session name used by AgentSpawner for worker windows. Kept in
+# sync with communication/mcp_server.py::_TMUX_SESSION — duplicated
+# rather than plumbed through because the two files run in separate
+# processes and sharing a constant would require a new module just
+# for that one string.
+_VISION_TMUX_SESSION = "claudeorch"
+
+
+def _capture_tmux_pane_sync(agent_name: str) -> str:
+    """Shell out to ``tmux capture-pane`` for the named worker.
+
+    Shared with the MCP tool's approach — read-only, idempotent, cheap.
+    Raises VisionError on any failure so the REST handler has a single
+    exception class to map to 500.
+    """
+    import subprocess
+
+    from core.vision import VisionError
+
+    try:
+        proc = subprocess.run(
+            [
+                "tmux",
+                "capture-pane",
+                "-t",
+                f"{_VISION_TMUX_SESSION}:{agent_name}",
+                "-p",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError as exc:
+        raise VisionError(f"tmux not installed: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise VisionError(f"tmux capture-pane timed out: {exc}") from exc
+    except Exception as exc:
+        raise VisionError(f"tmux capture-pane failed: {exc}") from exc
+    if proc.returncode != 0:
+        raise VisionError(
+            f"tmux capture-pane exit {proc.returncode}: {proc.stderr.strip()}"
+        )
+    return proc.stdout
+
 
 class CommunicationServer:
     def __init__(
@@ -891,6 +935,102 @@ class CommunicationServer:
                 "contact": None,
                 "platform": platform,
             }
+
+        @app.post("/vision/see-pane")
+        async def vision_see_pane(request: Request) -> JSONResponse:
+            # Thin REST wrapper around ``core.vision.ask_about_text``.
+            # We do the tmux capture-pane here (not in core.vision, which
+            # stays transport-agnostic) via the same subprocess shell-out
+            # the MCP tool uses. Duplicated intentionally — the MCP server
+            # runs in a separate process and can't share this function.
+            try:
+                body = await request.json()
+            except Exception:
+                return JSONResponse(
+                    {"error": "invalid json body"}, status_code=400
+                )
+            if not isinstance(body, dict):
+                return JSONResponse(
+                    {"error": "body must be an object"}, status_code=400
+                )
+            agent = body.get("agent")
+            question = body.get("question")
+            if not isinstance(agent, str) or not agent.strip():
+                return JSONResponse(
+                    {"error": "agent is required"}, status_code=400
+                )
+            if not isinstance(question, str) or not question.strip():
+                return JSONResponse(
+                    {"error": "question is required"}, status_code=400
+                )
+            from core.vision import VisionError, ask_about_text
+
+            loop = asyncio.get_running_loop()
+            try:
+                pane = await loop.run_in_executor(
+                    None, _capture_tmux_pane_sync, agent.strip()
+                )
+            except VisionError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=500)
+            try:
+                answer = await ask_about_text(
+                    pane, question, agent_label=agent.strip()
+                )
+            except VisionError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=500)
+            # token_usage is a placeholder shape — we don't currently
+            # parse the Anthropic response's ``usage`` block into the
+            # vision helpers (keeping the vision module transport-pure).
+            # Exposing the keys with nulls lets the UI render a consistent
+            # shape today and start surfacing real numbers when the
+            # helpers learn to pass through ``usage``.
+            return JSONResponse(
+                {
+                    "answer": answer,
+                    "token_usage": {"input": None, "output": None},
+                }
+            )
+
+        @app.post("/vision/see-screen")
+        async def vision_see_screen(request: Request) -> JSONResponse:
+            try:
+                body = await request.json()
+            except Exception:
+                return JSONResponse(
+                    {"error": "invalid json body"}, status_code=400
+                )
+            if not isinstance(body, dict):
+                return JSONResponse(
+                    {"error": "body must be an object"}, status_code=400
+                )
+            monitor_idx = body.get("monitor_idx", 0)
+            question = body.get("question")
+            if not isinstance(monitor_idx, int) or monitor_idx < 0:
+                return JSONResponse(
+                    {"error": "monitor_idx must be a non-negative int"},
+                    status_code=400,
+                )
+            if not isinstance(question, str) or not question.strip():
+                return JSONResponse(
+                    {"error": "question is required"}, status_code=400
+                )
+            from core.vision import (
+                VisionError,
+                ask_about_image,
+                capture_screen,
+            )
+
+            try:
+                png = await capture_screen(monitor_idx)
+                answer = await ask_about_image(png, question)
+            except VisionError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=500)
+            return JSONResponse(
+                {
+                    "answer": answer,
+                    "token_usage": {"input": None, "output": None},
+                }
+            )
 
         @app.post("/agents/spawn")
         async def agents_spawn(request: Request) -> Any:
