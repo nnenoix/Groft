@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Avatar } from "./Avatar";
 import { Icon } from "../icons";
 import { MODEL_OPTIONS, DEFAULT_MODEL } from "../../data/models";
@@ -70,6 +71,25 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
       }
     };
   }, []);
+
+  async function pickFiles() {
+    // Tauri dialog plugin returns string | string[] | null; in the browser
+    // dev shell the plugin throws — swallow and no-op so the page stays alive.
+    try {
+      const selection = await open({ multiple: true });
+      if (selection === null) return;
+      const paths = Array.isArray(selection) ? selection : [selection];
+      if (paths.length === 0) return;
+      const added: ComposerFile[] = paths.map((p) => {
+        const norm = p.replace(/\\/g, "/");
+        const name = norm.split("/").pop() || p;
+        return { name, size: 0, path: p };
+      });
+      setFiles((cur) => [...cur, ...added]);
+    } catch (err) {
+      console.warn("file picker unavailable", err);
+    }
+  }
 
   function submit() {
     if (!text.trim()) return;
@@ -172,7 +192,7 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
           </button>
           <span className="text-[9.5px] font-mono ml-1" style={{ color: "var(--text-dim)" }}>· {activeMode.label}</span>
           <div className="flex-1" />
-          <button className="btn btn-ghost !px-1.5 !py-1" title="Прикрепить"><Icon.Plus size={11} /></button>
+          <button onClick={pickFiles} className="btn btn-ghost !px-1.5 !py-1" title="Прикрепить"><Icon.Plus size={11} /></button>
           <button onClick={() => { setSlashOpen((v) => !v); setSettingsOpen(false); }} className="btn btn-ghost !px-1.5 !py-1" title="Команды">
             <span className="font-mono text-[10px]">/</span>
           </button>
@@ -264,12 +284,7 @@ export function Composer({ placeholder = "Что поручить Opus?", compac
 
       <div className="px-[var(--pad-3)] pb-[var(--pad-3)] flex items-center gap-2">
         <button className="btn btn-ghost !px-2 !py-1 text-[11px]" title="Прикрепить файл"
-          onClick={() =>
-            setFiles([
-              ...files,
-              { name: `file_${files.length + 1}.py`, size: 0 },
-            ])
-          }>
+          onClick={pickFiles}>
           <Icon.Plus size={12} />
         </button>
         <button className="btn btn-ghost !px-2 !py-1 text-[11px]" title="Голосом">
