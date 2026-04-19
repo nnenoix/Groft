@@ -53,11 +53,6 @@ function errorToString(e: unknown): string {
   return String(e);
 }
 
-// Telegram bot token format is `<bot_id>:<base64url-ish secret>`; accept only
-// that shape so a paste can't smuggle whitespace/quotes into run_tmux_command.
-export const TELEGRAM_TOKEN_RE = /^[0-9]{5,15}:[A-Za-z0-9_-]{20,60}$/;
-// Pairing codes are short alphanumerics issued by /telegram:access.
-export const PAIR_CODE_RE = /^[A-Za-z0-9_-]{4,32}$/;
 // Discord bot tokens are `<id>.<ts>.<hmac>` (dot-separated base64url).
 export const DISCORD_TOKEN_RE = /^[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}$/;
 
