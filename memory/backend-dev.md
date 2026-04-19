@@ -124,4 +124,18 @@
 - Baseline тестов после PR B: 11 passed + 4 skipped (3 windows-only + 1 frozen_boot без env var). Никаких регрессий.
 - `.gitignore`: добавлены `dist/`, `build/`, `*.spec.bak`. PyInstaller также создаёт `build/orchestrator/` — игнорится.
 - `requirements-dev.txt`: `pyinstaller>=6.0` строкой выше `pytest>=8`.
+
+### RELEASE-1 (PR D из 4)
+- `.github/workflows/release.yml` — single `build-windows` job на `windows-latest`. Триггер: `push: tags: ["v*"]` + `workflow_dispatch` (ручной повтор). `permissions: contents: write` — обязательно для `softprops/action-gh-release@v2` (без него release.upload 403). Step order: checkout → setup-python 3.12 → setup-node 20 (cache=npm, dep-path=ui/package-lock.json) → rust-toolchain stable → pip install requirements-dev → `python packaging/build_windows.py --smoke` (ELF на Linux не нужен — runner Windows, собираем PE) → `cd ui && npm ci` → `npx tauri build --bundles msi nsis` → upload-artifact v4 (msi + nsis отдельными name'ами) → gh-release v2 с `if: startsWith(github.ref, 'refs/tags/v')` чтобы workflow_dispatch без тега не падал на release-step.
+- Все `uses:` строго пиннутые: `actions/checkout@v4`, `actions/setup-python@v5`, `actions/setup-node@v4`, `dtolnay/rust-toolchain@stable`, `actions/upload-artifact@v4`, `softprops/action-gh-release@v2`. Никаких `@main` / unpinned — требование спеки + security.
+- `tauri.conf.json::bundle.windows.wix` — три поля: `language:"en-US"`, `template:null` (явный дефолт, WiX fragment не кастомный), `upgradeCode:"3be766d6-a9e9-4d6d-a623-6139519fdaa2"`. ЭТОТ GUID статичный навсегда — иначе MSI upgrade сломается (каждая новая установка = parallel install). JSON без комментариев (tauri не парсит JSONC в этом schema).
+- `packaging/README.md` — добавлены "Install from release" + "Uninstall" секции после основного build-howto, перед "Notes". Последний Notes-пункт про "Tauri sidecar wiring and MSI packaging land in later PRs" заменён на актуальный "MSI upgradeCode зафиксирован, не регенерить".
+- `README.md` в корне — ≤30 строк, ссылки на Releases / `packaging/README.md` / `CLAUDE.md`. Плюс dev-snippet с venv + pytest + `ui && npm run tauri dev`.
+- `.gitignore`: root уже покрыт через `node_modules/`, но добавлены явные `ui/node_modules/`, `ui/dist/`, `ui/src-tauri/target/` для читаемости. Нижние `.gitignore` (`ui/.gitignore`, `ui/src-tauri/.gitignore`) уже эти пути покрывают — verify: `git check-ignore -v <path>`.
+- Acceptance (все green):
+  - `pytest -q` → 13 passed, 4 skipped (baseline сохранён).
+  - `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"` → no exception.
+  - `python3 -c "import json; d=json.load(...); assert d['bundle']['windows']['wix']['upgradeCode']==..."` → ok.
+  - `grep -n "upgradeCode"` — одно вхождение.
+- Out of scope (явно отмечено в спеке): code signing, auto-updater, macOS/Linux matrix. Первый релиз — вручную тег `v0.1.0` после merge'а PR D.
 ```

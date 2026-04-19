@@ -35,8 +35,28 @@ folder, not just the exe.
 Writable runtime state (`.claudeorch/`, `memory/`) lands in CWD by default;
 override via `CLAUDEORCH_USER_DATA=<path>`.
 
+## Install from release
+
+1. Download `Groft_<version>_x64_en-US.msi` (или NSIS `.exe`) from
+   [GitHub Releases](https://github.com/nnenoix/Groft/releases).
+2. Double-click the file. Windows SmartScreen может показать warning
+   (приложение не подписано) — More info → Run anyway.
+3. Launch "Groft" from the Start menu.
+4. On first launch, the app seeds `%APPDATA%\com.groft.app\` with default
+   config + agent definitions, then spawns the bundled orchestrator sidecar.
+
+**Prerequisites:** Claude CLI (`claude`) must be on PATH. Install from
+https://docs.anthropic.com/en/docs/claude-code/.
+
+## Uninstall
+
+Windows → Settings → Apps → Groft → Uninstall. User data in
+`%APPDATA%\com.groft.app\` не удаляется автоматически (сотрите руками
+если нужно полностью чистое состояние).
+
 ## Notes
 
 - Windows hosts need the Visual C++ Redistributable (usually pre-installed).
 - `start.ps1` / `stop.ps1` keep working for dev mode with system Python.
-- Tauri sidecar wiring and MSI packaging land in later PRs.
+- MSI `upgradeCode` зафиксирован в `ui/src-tauri/tauri.conf.json` — не
+  регенерируйте его, иначе обновления установятся рядом со старой копией.
