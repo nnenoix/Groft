@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,12 @@ from mcp.server.fastmcp import FastMCP
 
 from communication.client import CommunicationClient
 from core.paths import claudeorch_dir
+from core.vision import (
+    VisionError,
+    ask_about_image,
+    ask_about_text,
+    capture_screen,
+)
 
 AGENT_NAME = os.environ.get("AGENT_NAME", "unknown")
 WS_URL = os.environ.get("WS_URL", "ws://localhost:8765")
@@ -136,6 +143,99 @@ async def get_connected_agents() -> str:
     async with httpx.AsyncClient() as http:
         r = await http.get(f"{REST_URL}/agents")
         return r.text
+
+
+# tmux session name is fixed by AgentSpawner ("claudeorch"). We reach tmux
+# directly here instead of plumbing the ProcessBackend through the MCP
+# process — the MCP server is a separate process with its own stdio
+# transport, and sharing a backend would require IPC that doesn't exist
+# today. Capture-pane is cheap, idempotent and read-only, so the
+# shortcut is safe. If the session name ever changes, update this
+# constant and the matching AgentSpawner side.
+_TMUX_SESSION = "claudeorch"
+
+
+def _capture_pane_sync(agent_name: str) -> str:
+    """Shell out to ``tmux capture-pane`` synchronously.
+
+    Kept sync + off-loaded via ``run_in_executor`` in the async wrapper
+    because subprocess.run is blocking. Errors collapse to VisionError
+    so the MCP tool has one failure type to surface.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                "tmux",
+                "capture-pane",
+                "-t",
+                f"{_TMUX_SESSION}:{agent_name}",
+                "-p",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError as exc:
+        raise VisionError(f"tmux not installed: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise VisionError(f"tmux capture-pane timed out: {exc}") from exc
+    except Exception as exc:
+        raise VisionError(f"tmux capture-pane failed: {exc}") from exc
+    if proc.returncode != 0:
+        # tmux prints diagnostics to stderr; echo them back so the
+        # operator sees "can't find window 'foo'" rather than a bare
+        # exit code.
+        raise VisionError(
+            f"tmux capture-pane exit {proc.returncode}: {proc.stderr.strip()}"
+        )
+    return proc.stdout
+
+
+async def _capture_pane(agent_name: str) -> str:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _capture_pane_sync, agent_name)
+
+
+@server.tool()
+async def see_screen(monitor_idx: int, question: str) -> str:
+    """Take a screenshot and ask Claude Sonnet about it.
+
+    WARNING: Uses the multimodal API, which costs roughly 5-10x more
+    than a normal text call. Prefer ``see_agent_pane`` when you just
+    need to inspect a terminal — that path goes through the text-only
+    model. Use this tool only when the answer genuinely requires
+    pixels (e.g. "what colour is the error banner in the browser?").
+
+    Parameters:
+        monitor_idx: 0 = primary display, 1 = second monitor, etc.
+        question: what to ask about the screenshot.
+    """
+    try:
+        png = await capture_screen(monitor_idx)
+        return await ask_about_image(png, question)
+    except VisionError as exc:
+        return f"Vision error: {exc}"
+
+
+@server.tool()
+async def see_agent_pane(agent_name: str, question: str) -> str:
+    """Read another agent's tmux pane and ask Claude Sonnet about it.
+
+    Cheaper than ``see_screen`` because it skips the multimodal path —
+    the pane is already text, so we send it as text. Still Sonnet-class
+    though, so each call is ~5x a normal Haiku call; keep questions
+    specific.
+
+    Parameters:
+        agent_name: tmux window name (e.g. "backend-dev"). Must match
+            the name AgentSpawner used when creating the window.
+        question: what to ask about the captured pane.
+    """
+    try:
+        pane = await _capture_pane(agent_name)
+        return await ask_about_text(pane, question, agent_label=agent_name)
+    except VisionError as exc:
+        return f"Vision error: {exc}"
 
 
 if __name__ == "__main__":
