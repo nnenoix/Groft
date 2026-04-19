@@ -66,13 +66,19 @@ function useChannels(): UseChannelsResult {
     let cancelled = false;
     (async () => {
       try {
-        const raw = await invoke<string>("get_messenger_status", {
-          messenger: "telegram",
-        });
+        const resp = await fetch(
+          "http://localhost:8766/messenger/telegram/status",
+        );
+        if (!resp.ok) return;
+        const body = (await resp.json()) as {
+          status?: string;
+          username?: string | null;
+        };
         if (cancelled) return;
-        const mapped = toChannelStatus(raw);
+        const mapped = toChannelStatus(body.status ?? "");
         setStatus(mapped);
-        if (mapped === "connected") {
+        if (typeof body.username === "string") setUsername(body.username);
+        if (mapped === "connected" || mapped === "connecting") {
           setCurrent("telegram");
         }
       } catch (err) {
@@ -95,15 +101,32 @@ function useChannels(): UseChannelsResult {
           config: JSON.stringify(config),
         });
         if (m === "telegram") {
-          const token = config.token ?? "";
-          // allowlist — any other shape would flow straight into a tmux
-          // send-keys command string below and let the user inject keystrokes.
-          if (!TELEGRAM_TOKEN_RE.test(token)) {
+          const token = (config.token ?? "").trim();
+          // Length sanity — empty/whitespace tokens never make the trip,
+          // real format validation happens on the backend via getMe.
+          if (token.length < 20 || /\s/.test(token)) {
             throw new Error("Invalid Telegram bot token format");
           }
-          await invoke<string>("run_tmux_command", {
-            command: `/telegram:configure ${token}`,
-          });
+          const resp = await fetch(
+            "http://localhost:8766/messenger/telegram/configure",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ token }),
+            },
+          );
+          let body: { ok?: boolean; username?: string | null; error?: string };
+          try {
+            body = await resp.json();
+          } catch {
+            throw new Error(`HTTP ${resp.status}`);
+          }
+          if (!resp.ok || !body.ok) {
+            throw new Error(body.error || `HTTP ${resp.status}`);
+          }
+          setUsername(
+            typeof body.username === "string" ? body.username : null,
+          );
           // Stay in "connecting" — the user still has to pair via code.
         } else if (m === "discord") {
           const token = config.token ?? "";
@@ -125,36 +148,50 @@ function useChannels(): UseChannelsResult {
     [],
   );
 
-  const pair = useCallback(async (code: string) => {
+  // Poll /status every 2s until status flips to "connected" or "error",
+  // or until the 2-minute ceiling. The user pastes the code in Telegram;
+  // backend sets paired_user_id when the /pair ... message lands.
+  const pair = useCallback(async (_code: string) => {
     setErrorMessage(null);
-    try {
-      if (!PAIR_CODE_RE.test(code)) {
-        throw new Error("Invalid pairing code format");
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      try {
+        const resp = await fetch(
+          "http://localhost:8766/messenger/telegram/status",
+        );
+        if (resp.ok) {
+          const body = (await resp.json()) as {
+            status?: string;
+            username?: string | null;
+          };
+          const mapped = toChannelStatus(body.status ?? "");
+          if (typeof body.username === "string") setUsername(body.username);
+          if (mapped === "connected") {
+            setStatus("connected");
+            return;
+          }
+          if (mapped === "error") {
+            setStatus("error");
+            return;
+          }
+        }
+      } catch (err) {
+        log.info("telegram status poll failed", err);
       }
-      await invoke<string>("run_tmux_command", {
-        command: `/telegram:access pair ${code}`,
-      });
-      setStatus("connected");
-      // Real @handle would arrive via a future WS event; leave null for now
-      // rather than show a misleading value.
-      setUsername(null);
-    } catch (e) {
-      setStatus("error");
-      setErrorMessage(errorToString(e));
+      await new Promise((r) => setTimeout(r, 2000));
     }
+    setStatus("error");
+    setErrorMessage("Pairing timed out — user didn't pair within 2 minutes");
   }, []);
 
   const disconnect = useCallback(async () => {
+    // TODO: backend has no disconnect endpoint yet — just clear local state
+    // so the UI doesn't show a stale "connected" badge. Token/paired_user_id
+    // stays on disk until the backend grows a DELETE/reset.
     setStatus("not-connected");
     setUsername(null);
     setErrorMessage(null);
-    try {
-      await invoke<string>("run_tmux_command", {
-        command: "/telegram:access policy disabled",
-      });
-    } catch (err) {
-      log.exception(err, "tmux disconnect failed");
-    }
+    log.info("telegram disconnect: local-only, backend reset not implemented");
   }, []);
 
   const testWebhook = useCallback(
@@ -193,12 +230,20 @@ function useChannels(): UseChannelsResult {
 
   const getTelegramStatus = useCallback(async (): Promise<ChannelStatus> => {
     try {
-      const raw = await invoke<string>("get_messenger_status", {
-        messenger: "telegram",
-      });
-      const mapped = toChannelStatus(raw);
+      const resp = await fetch(
+        "http://localhost:8766/messenger/telegram/status",
+      );
+      if (!resp.ok) return "not-connected";
+      const body = (await resp.json()) as {
+        status?: string;
+        username?: string | null;
+      };
+      const mapped = toChannelStatus(body.status ?? "");
       setStatus(mapped);
-      if (mapped === "connected") setCurrent("telegram");
+      if (typeof body.username === "string") setUsername(body.username);
+      if (mapped === "connected" || mapped === "connecting") {
+        setCurrent("telegram");
+      }
       return mapped;
     } catch (err) {
       log.info("telegram status unavailable", err);
