@@ -58,3 +58,21 @@
 3. `Orchestrator.spawn_role("scout")` возвращает False до правки `config.yml`, True после (без явного reload_config — автоматически через spawn_role).
 
 **Почему guard на пустой reload:** если юзер временно поломал YAML в редакторе, не хотим терять известный роли и делать всю оркестрацию неспаунимой до исправления. Сохранение старой копии — defense-in-depth.
+
+---
+
+## 2026-04-19 — Phase 3 skipped: Telegram backend не существует
+
+**Что:** Phase 3 из плана ("Telegram wizard test с токеном из `.claudeorch/secrets.env`") откладывается в объединённый Phase 6 (messenger wizards).
+
+**Почему:** Аудит описывал Telegram-wizard как «рабочий до Step 3» с багом в структурированном ответе. Проверка показала большее — backend-а **не существует вообще**:
+- `grep -rn "telegram" --include="*.py"` → 0 результатов. 
+- Слэш-команды `/telegram:configure`, `/telegram:access` нигде не обрабатываются.
+- `run_tmux_command` (в `ui/src-tauri/src/messenger.rs`) шлёт эти команды в Opus-пейн, где claude воспринимает их как неизвестный слэш.
+- `save_messenger_config` только пишет `.claudeorch/messenger-telegram.json`, но никто этот JSON не читает.
+
+Таким образом, «протестировать визард» невозможно — под ним пустота.
+
+**Что сделаю в Phase 6:** написать реальный Python-бэкенд (aiogram или python-telegram-bot long-polling), зарегистрировать `/telegram:configure` и `/telegram:access` как MCP tools у опуса, ввести `/messenger/status/{name}` REST, убрать `setUsername(null)` заглушку.
+
+**Токен** в `.claudeorch/secrets.env` (`TELEGRAM_BOT_TOKEN=...`) — валидный `8778460710:...`, используется в Phase 6 для интеграционного теста.
