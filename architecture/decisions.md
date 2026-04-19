@@ -40,3 +40,21 @@
 **Почему guard explicit, а не «только если opus WS-зарегистрирован»:** MCP-мост подключается лениво (см. Fix A). Между рестартом MCP и первым tool-call opus WS-не-зарегистрирован, но продолжает читать inbox через MCP — pane-форвард в этом окне тоже был бы дублем, а не единственным каналом.
 
 **Как проверил:** `pytest tests/unit/test_shutdown_endpoint.py tests/integration/test_spawn_flow.py` — 6 passed. Функциональная проверка — требует второго окна с opus'ом под UI; в этой сессии не делал, оставлено на оператора.
+
+---
+
+## 2026-04-19 — Fix C: AgentSpawner config hot-reload
+
+**Что:** 
+- `AgentSpawner._load_config(path)` — чистый статический ридер (возвращает `{}` на ошибку).
+- `AgentSpawner.reload_config()` — публичный метод, перечитывает тот же `config_path` и обновляет `self.config`, но только если свежий парс непустой (сломанный YAML не стирает in-memory).
+- `Orchestrator.spawn_role()` — когда `role_name not in known_roles()`, зовёт `reload_config()` и повторяет проверку. Только если после reload роль всё ещё неизвестна — отказ.
+
+**Почему:** `AgentSpawner.config` кешировался в `__init__` и жил до рестарта процесса. Пользователь добавлял новую роль в `config.yml` — `/spawn new-role` падало «unknown role», хотя файл уже содержал запись. Это ломало продуктовый сценарий «добавил роль → сразу спаунится».
+
+**Как проверил:** `pytest tests/unit/test_spawner_reload.py tests/unit/test_shutdown_endpoint.py tests/integration/test_spawn_flow.py` — 9 passed. Покрыты три кейса:
+1. reload подхватывает свежедобавленную роль.
+2. reload на malformed YAML не стирает известные роли.
+3. `Orchestrator.spawn_role("scout")` возвращает False до правки `config.yml`, True после (без явного reload_config — автоматически через spawn_role).
+
+**Почему guard на пустой reload:** если юзер временно поломал YAML в редакторе, не хотим терять известный роли и делать всю оркестрацию неспаунимой до исправления. Сохранение старой копии — defense-in-depth.
