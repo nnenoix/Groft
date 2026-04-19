@@ -124,3 +124,26 @@
 - `_isolate_user_data` fixture (autouse): `monkeypatch.setenv("CLAUDEORCH_USER_DATA", tmp_path)` + `paths.install_root.cache_clear() / user_data_root.cache_clear()` до и после. Без этого тесты leak'ают в реальный `.claudeorch`.
 - getMe mock: `httpx.MockTransport` + `monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)` — инжектит transport в каждый новый клиент.
 - Fake clock: `srv._telegram_clock = lambda: now[0]` + list-based counter для манипуляции.
+
+## core/messengers/telegram.py (Phase 6.2 — polling + handlers)
+
+- `read_state_file(path)` / `load_paired_user_id(path)` — module-level helpers, shared между bridge (персист) и `core/main.py` (boot-hook). Best-effort, пустой dict на любую ошибку.
+- `TelegramBridge.paired_user_id` (property) — отдельный slot, set'ится в `accept_pairing`. Construct seeds из allowlist если `len==1` (для сохранения поведения при рестарте из JSON).
+- `_on_pair(update, context)`: `context.args[0]` → uppercase → `accept_pairing(code, user.id, loop.time())`. Reply `"Paired ✓"` или `"Invalid/expired code"`. Missing args → usage hint.
+- `_on_ask(update, context)`: allowlist-check только по `paired_user_id` (не iterate allowlist). Strangers silently dropped (no reply — не leak'аем bot existence). `args[0]=agent`, `args[1:]=text`. Chat_id из `update.effective_chat.id` пробрасывается в `handle_ask`.
+- `_on_fallback`: `MessageHandler(TEXT & ~COMMAND)` — reply "Use /ask <agent> <text> or /pair <code>."
+- `handle_ask(agent, text, *, chat_id=None)` — echo confirmation через `_echo(chat_id, "[{agent}] sent: {first-line}")` via `application.bot.send_message`. Chat_id=None → skip echo (для прямых вызовов не из PTB).
+- `_default_polling`: PTB 21+ pattern — `Application.builder().token(...).build()` → `add_handler(CommandHandler/MessageHandler)` → `initialize()` → `start()` → `updater.start_polling()` → park в `while bridge._running: sleep(1)`. PTB версия 22.7 работает с этим API.
+- `stop()` тирит down Application: `updater.stop()` → `app.stop()` → `app.shutdown()` — всё best-effort, per-step swallow. Затем cancel task.
+
+## core/main.py — Telegram boot hook
+
+- `_maybe_start_telegram_bridge(orchestrator, backend)` → `TelegramBridge | None`. Читает `claudeorch_dir() / "messenger-telegram.json"` через `read_state_file`. Валидирует `is_valid_token_format(token)`. Seed allowlist из `paired_user_id` если int.
+- Все failure modes (no file, bad token, PTB missing, ctor raise, start raise) → log + return None. Boot никогда не крашится.
+- Вызов после `orchestrator = Orchestrator(spawner)`, перед `CommunicationServer(...)`. Teardown: `await telegram_bridge.stop()` перед `spawner.despawn_all()`.
+
+## tests/unit/test_main_telegram_boot.py (Phase 6.2)
+
+- `_maybe_start_telegram_bridge` тестируется напрямую (не весь `main()`). `CLAUDEORCH_USER_DATA` изолирован через fixture.
+- Mock `TelegramBridge.start` через `monkeypatch.setattr(tg_module.TelegramBridge, "start", fake_start)` — `fake_start` лишь выставляет `self._running = True` (real_start вызывает polling factory → PTB import).
+- Fake Update/Context classes в `test_telegram_bridge.py` (`_FakeMessage/_FakeUser/_FakeChat/_FakeUpdate/_FakeContext`) — mimic только те атрибуты которые handlers читают. Нет PTB dependency в unit тестах.
