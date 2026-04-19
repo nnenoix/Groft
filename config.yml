@@ -7,6 +7,8 @@ models:
   frontend-dev: claude-sonnet-4-6    # frontend разработчик
   tester: claude-haiku-4-5-20251001  # тестировщик — можно дешевле
   reviewer: claude-sonnet-4-6        # ревьюер
+  auditor: claude-sonnet-4-6         # аудитор UI-гапов
+  scout: claude-sonnet-4-6           # разведчик UI-гапов (6-я роль)
 
 # Доступные модели:
 # claude-opus-4-7 — самый умный, медленнее

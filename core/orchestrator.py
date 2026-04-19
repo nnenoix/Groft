@@ -30,11 +30,18 @@ class Orchestrator:
 
         Returns False without spawning if role_name is not listed under
         `models:` in config.yml — prevents typos leaking unbounded claude procs.
+
+        Before rejecting an unknown role, force a config.yml reload. That lets
+        the user add a new role to config.yml and `/spawn <name>` it right
+        away without bouncing the orchestrator.
         """
         roles = self.known_roles()
         if role_name not in roles:
-            log.warning("unknown role=%r; known=%s", role_name, roles)
-            return False
+            self._spawner.reload_config()
+            roles = self.known_roles()
+            if role_name not in roles:
+                log.warning("unknown role=%r; known=%s", role_name, roles)
+                return False
         if role_name in self._spawner.active_agents:
             log.info("role already active role=%s", role_name)
             return False

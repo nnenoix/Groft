@@ -21,14 +21,26 @@ class AgentSpawner:
         backend: ProcessBackend | None = None,
     ) -> None:
         self.project_path = Path(project_path)
+        # retained so reload_config() can re-read the same file after the user
+        # edits config.yml at runtime (e.g. adds a new role under `models:`).
+        self._config_path = config_path
         # config.yml may be missing or malformed during local setups; fall back
         # to an empty model map and let agents use the spawn-time default.
-        self.config: dict[str, Any] = {}
+        self.config: dict[str, Any] = self._load_config(config_path)
+        # default backend keeps the legacy single-arg constructor working for
+        # ad-hoc REPL use; production wiring in core/main.py always injects.
+        self._backend: ProcessBackend = backend if backend is not None else TmuxBackend()
+        self.active_agents: dict[str, dict[str, Any]] = {}
+        self._register_cb: Callable[[str, str], Any] | None = None
+        self._unregister_cb: Callable[[str], Any] | None = None
+
+    @staticmethod
+    def _load_config(config_path: str) -> dict[str, Any]:
         try:
             with open(config_path) as f:
                 loaded = yaml.safe_load(f)
                 if isinstance(loaded, dict):
-                    self.config = loaded
+                    return loaded
         except FileNotFoundError:
             log.warning("config.yml missing at %s; using empty models map", config_path)
         except (OSError, yaml.YAMLError):
@@ -37,12 +49,15 @@ class AgentSpawner:
                 config_path,
                 exc_info=True,
             )
-        # default backend keeps the legacy single-arg constructor working for
-        # ad-hoc REPL use; production wiring in core/main.py always injects.
-        self._backend: ProcessBackend = backend if backend is not None else TmuxBackend()
-        self.active_agents: dict[str, dict[str, Any]] = {}
-        self._register_cb: Callable[[str, str], Any] | None = None
-        self._unregister_cb: Callable[[str], Any] | None = None
+        return {}
+
+    def reload_config(self) -> None:
+        """Re-read config.yml from disk so a newly declared role (added since
+        process start) becomes spawnable without restart. Malformed YAML keeps
+        the current in-memory config rather than wiping known roles."""
+        reloaded = self._load_config(self._config_path)
+        if reloaded:
+            self.config = reloaded
 
     def set_register_callback(self, fn: Callable[[str, str], Any]) -> None:
         self._register_cb = fn
@@ -58,7 +73,19 @@ class AgentSpawner:
         models = self.config.get("models", {}) if isinstance(self.config, dict) else {}
         model = models.get(agent_name, "claude-sonnet-4-6")
         cmd = ["claude", "--model", model, "--dangerously-skip-permissions"]
-        env = {"AGENT_NAME": agent_name}
+        # Project-scoped MCP config. Claude Code auto-discovers `.mcp.json` from
+        # cwd, but tmux window cwd is not guaranteed to match project_path on
+        # every host, so we pass the absolute path explicitly.
+        mcp_config = self.project_path / ".mcp.json"
+        if mcp_config.is_file():
+            cmd += ["--mcp-config", str(mcp_config)]
+        # CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 enables the agent-teams feature
+        # in the spawned process so sub-agents can see each other via the
+        # claudeorch-comms MCP bridge and answer WS messages from opus.
+        env = {
+            "AGENT_NAME": agent_name,
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+        }
         target = await self._backend.spawn(agent_name, cmd, env=env)
         if target is None:
             return False
