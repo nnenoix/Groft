@@ -1,4 +1,5 @@
 mod agent_fs;
+mod cli_detect;
 mod messenger;
 
 use std::path::Path;
@@ -223,6 +224,7 @@ pub fn run() {
             agent_fs::write_agent_file,
             agent_fs::read_agent_files,
             agent_fs::delete_agent_file,
+            cli_detect::detect_claude_cli,
             messenger::save_messenger_config,
             messenger::get_messenger_status,
             messenger::run_tmux_command,
