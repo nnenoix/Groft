@@ -14,3 +14,6 @@ ork-handoff/
 dist/
 build/
 *.spec.bak
+ui/node_modules/
+ui/dist/
+ui/src-tauri/target/
