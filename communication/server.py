@@ -16,6 +16,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.server import WebSocketServerProtocol
 
 from communication.task_parser import parse_tasks_dir
+from core.process import ProcessBackend
 
 log = logging.getLogger(__name__)
 
@@ -46,8 +47,8 @@ class CommunicationServer:
         rest_host: str = "localhost",
         rest_port: int = 8766,
         db_path: Path | str | None = None,
-        lead_tmux_target: str | None = None,
-        agent_tmux_targets: dict[str, str] | None = None,
+        backend: ProcessBackend | None = None,
+        lead_target: str | None = None,
         tasks_dir: Path | str | None = None,
     ) -> None:
         self._ws_host = ws_host
@@ -55,8 +56,13 @@ class CommunicationServer:
         self._rest_host = rest_host
         self._rest_port = rest_port
         self._db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
-        self._lead_tmux_target = lead_tmux_target
-        self._agent_tmux_targets: dict[str, str] = dict(agent_tmux_targets or {})
+        # backend is optional so unit tests can construct a server without
+        # process plumbing — message-forward to panes degrades to a no-op.
+        self._backend: ProcessBackend | None = backend
+        # lead_target is the fallback pane address for messages whose recipient
+        # has no dedicated target registered with the backend (e.g. /spawn arrives
+        # for opus before any worker exists).
+        self._lead_target = lead_target
         self._tasks_dir: Path | None = Path(tasks_dir) if tasks_dir is not None else None
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._db_lock = asyncio.Lock()
@@ -324,8 +330,8 @@ class CommunicationServer:
                 return
             await self._route_direct(to, msg)
             await self._log_message(sender, to, "message", msg)
-            # forward to recipient's tmux pane whenever one is known. Workers
-            # don't run a WS consumer, so the tmux pane is the actual inbox.
+            # forward to recipient's pane whenever one is known. Workers
+            # don't run a WS consumer, so the pane is the actual inbox.
             if isinstance(content, str):
                 mode = msg.get("mode")
                 model = msg.get("model")
@@ -335,7 +341,7 @@ class CommunicationServer:
                 if isinstance(model, str) and model:
                     prefix_parts.append(f"model={model}")
                 prefix = f"[{', '.join(prefix_parts)}] " if prefix_parts else ""
-                await self._forward_to_tmux(to, prefix + content)
+                await self._forward_to_pane(to, prefix + content)
         elif mtype == "broadcast":
             await self._route_broadcast(sender, msg)
             await self._log_message(sender, None, "broadcast", msg)
@@ -456,65 +462,27 @@ class CommunicationServer:
             log.warning("ui forward failed", exc_info=True)
             self._unregister(UI_SINK_AGENT, target)
 
-    def _resolve_tmux_target(self, to: str) -> str | None:
-        target = self._agent_tmux_targets.get(to)
-        if target is not None:
-            return target
-        return self._lead_tmux_target
+    def _resolve_pane_target(self, to: str) -> str | None:
+        # backend.list_targets() reflects live spawns; lead_target is the
+        # boot-time fallback (typically the orchestrator's own pane).
+        if self._backend is not None:
+            target = self._backend.list_targets().get(to)
+            if target is not None:
+                return target
+        return self._lead_target
 
-    async def _forward_to_tmux(self, to: str, content: str) -> None:
-        target = self._resolve_tmux_target(to)
+    async def _forward_to_pane(self, to: str, content: str) -> None:
+        if self._backend is None:
+            return
+        target = self._resolve_pane_target(to)
         if target is None:
             return
-        # split on newlines so literal typing per-line + Enter preserves multi-line payloads
-        lines = content.split("\n")
-        for index, line in enumerate(lines):
-            if line:
-                if not await self._tmux_send(target, ["-l", "--", line]):
-                    log.warning(
-                        "tmux forward aborted mid-payload: to=%s target=%s at line %d/%d",
-                        to,
-                        target,
-                        index + 1,
-                        len(lines),
-                    )
-                    return
-            if index < len(lines) - 1:
-                if not await self._tmux_send(target, ["Enter"]):
-                    log.warning(
-                        "tmux forward aborted at Enter: to=%s target=%s after line %d/%d",
-                        to,
-                        target,
-                        index + 1,
-                        len(lines),
-                    )
-                    return
-        await self._tmux_send(target, ["Enter"])
-
-    async def _tmux_send(self, target: str, extra: list[str]) -> bool:
-        args = ["tmux", "send-keys", "-t", target, *extra]
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-        except FileNotFoundError:
-            log.warning("tmux binary not found; cannot forward to %s", target)
-            return False
-        except Exception:
+        # injection guard lives in the backend's send_text — see TmuxBackend.
+        ok = await self._backend.send_text(target, content)
+        if not ok:
             log.warning(
-                "tmux spawn failed for target=%s", target, exc_info=True
+                "pane forward failed: to=%s target=%s", to, target
             )
-            return False
-        try:
-            await proc.communicate()
-        except Exception:
-            log.warning(
-                "tmux communicate failed for target=%s", target, exc_info=True
-            )
-            return False
-        return proc.returncode == 0
 
     async def _route_broadcast(self, sender: str, payload: dict[str, Any]) -> None:
         with self._lock:

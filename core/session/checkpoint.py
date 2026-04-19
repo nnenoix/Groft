@@ -56,12 +56,19 @@ class Checkpoint:
 
     @classmethod
     def from_row(cls, row: aiosqlite.Row | tuple[Any, ...]) -> "Checkpoint":
+        agent_states = json.loads(row[5])
+        # PR1 ProcessBackend rename: tmux_target -> target. Read-alias keeps
+        # pre-refactor checkpoints loadable; new writes always use "target".
+        if isinstance(agent_states, dict):
+            for name, state in agent_states.items():
+                if isinstance(state, dict) and "target" not in state and "tmux_target" in state:
+                    state["target"] = state["tmux_target"]
         return cls(
             session_id=row[1],
             stage=row[2],
             task_number=row[3],
             completed_tasks=json.loads(row[4]),
-            agent_states=json.loads(row[5]),
+            agent_states=agent_states,
             last_commit=row[6],
             dependency_graph=json.loads(row[7]),
             unfinished_tasks=json.loads(row[8]),

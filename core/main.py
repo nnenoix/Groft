@@ -22,6 +22,7 @@ from core.guard.process_guard import ProcessGuard
 from core.handoff import scan_and_record_handoff
 from core.logging_setup import configure_logging
 from core.orchestrator import Orchestrator
+from core.process import select_backend
 from core.recovery.recovery_manager import RecoveryManager
 from core.session.checkpoint import Checkpoint, CheckpointManager
 from core.spawner import AgentSpawner
@@ -34,44 +35,51 @@ CONFIG_PATH = PROJECT_ROOT / "config.yml"
 
 log = logging.getLogger(__name__)
 
-# defaults used when config.yml is missing or the tmux section is absent
-_DEFAULT_LEAD_TMUX_TARGET = "claudeorch:0"
-_DEFAULT_AGENT_TMUX_TARGETS: dict[str, str] = {"opus": "claudeorch:0"}
+# defaults used when config.yml is missing or the section is absent
+_DEFAULT_LEAD_TARGET = "claudeorch:0"
+_DEFAULT_AGENT_TARGETS: dict[str, str] = {"opus": "claudeorch:0"}
 
 
-def _load_tmux_config(path: Path) -> tuple[str, dict[str, str]]:
+def _load_runtime_config(path: Path) -> tuple[dict[str, Any], str, dict[str, str]]:
+    """Return (full_config, lead_target, agent_targets).
+
+    Lead/agent targets keep their legacy `tmux:` location for now — backend
+    selection lives under `process:` (PR1) and stays orthogonal.
+    """
     # best-effort: any parse/read failure falls back to defaults
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return _DEFAULT_LEAD_TMUX_TARGET, dict(_DEFAULT_AGENT_TMUX_TARGETS)
+        return {}, _DEFAULT_LEAD_TARGET, dict(_DEFAULT_AGENT_TARGETS)
     except OSError:
         log.warning("config.yml unreadable, falling back to defaults", exc_info=True)
-        return _DEFAULT_LEAD_TMUX_TARGET, dict(_DEFAULT_AGENT_TMUX_TARGETS)
+        return {}, _DEFAULT_LEAD_TARGET, dict(_DEFAULT_AGENT_TARGETS)
     try:
         data: Any = yaml.safe_load(raw) or {}
     except yaml.YAMLError:
         log.warning("config.yml parse failed, falling back to defaults", exc_info=True)
-        return _DEFAULT_LEAD_TMUX_TARGET, dict(_DEFAULT_AGENT_TMUX_TARGETS)
-    tmux_section = data.get("tmux") if isinstance(data, dict) else None
-    if not isinstance(tmux_section, dict):
-        return _DEFAULT_LEAD_TMUX_TARGET, dict(_DEFAULT_AGENT_TMUX_TARGETS)
-    lead_raw = tmux_section.get("lead_target")
-    lead = lead_raw if isinstance(lead_raw, str) and lead_raw else _DEFAULT_LEAD_TMUX_TARGET
-    targets_raw = tmux_section.get("agent_targets")
+        return {}, _DEFAULT_LEAD_TARGET, dict(_DEFAULT_AGENT_TARGETS)
+    if not isinstance(data, dict):
+        return {}, _DEFAULT_LEAD_TARGET, dict(_DEFAULT_AGENT_TARGETS)
+    section = data.get("tmux")
+    if not isinstance(section, dict):
+        return data, _DEFAULT_LEAD_TARGET, dict(_DEFAULT_AGENT_TARGETS)
+    lead_raw = section.get("lead_target")
+    lead = lead_raw if isinstance(lead_raw, str) and lead_raw else _DEFAULT_LEAD_TARGET
+    targets_raw = section.get("agent_targets")
     agent_targets: dict[str, str] = {}
     if isinstance(targets_raw, dict):
         for name, target in targets_raw.items():
             if isinstance(name, str) and isinstance(target, str) and name and target:
                 agent_targets[name] = target
     if not agent_targets:
-        agent_targets = dict(_DEFAULT_AGENT_TMUX_TARGETS)
-    return lead, agent_targets
+        agent_targets = dict(_DEFAULT_AGENT_TARGETS)
+    return data, lead, agent_targets
 
 
 async def main() -> None:
     configure_logging(log_dir=PROJECT_ROOT / ".claudeorch" / "logs")
-    lead_tmux_target, agent_tmux_targets = _load_tmux_config(CONFIG_PATH)
+    raw_config, lead_target, agent_targets = _load_runtime_config(CONFIG_PATH)
 
     # install signal handlers before anything binds ports / opens files so a
     # Ctrl-C during boot lands in the guard instead of aborting mid-startup
@@ -79,9 +87,14 @@ async def main() -> None:
     process_guard = ProcessGuard()
     process_guard.install()
 
+    # one ProcessBackend instance shared by spawner/server/watchdog so they
+    # all read the same live target registry. select_backend honours
+    # process.backend in config.yml (default auto -> tmux on POSIX).
+    backend = select_backend(raw_config)
+
     comm_server = CommunicationServer(
-        lead_tmux_target=lead_tmux_target,
-        agent_tmux_targets=agent_tmux_targets,
+        backend=backend,
+        lead_target=lead_target,
         tasks_dir=PROJECT_ROOT / "tasks",
     )
     await comm_server.start()
@@ -92,11 +105,11 @@ async def main() -> None:
     await comm_client.connect()
 
     checkpoint_manager = CheckpointManager()
-    agent_watchdog = AgentWatchdog(comm_client=comm_client)
+    agent_watchdog = AgentWatchdog(comm_client=comm_client, backend=backend)
     error_handler = ErrorHandler()
     git_manager = GitManager()
     memory_manager = MemoryManager()
-    spawner = AgentSpawner(str(PROJECT_ROOT), str(CONFIG_PATH))
+    spawner = AgentSpawner(str(PROJECT_ROOT), str(CONFIG_PATH), backend=backend)
     orchestrator = Orchestrator(spawner)
 
     await checkpoint_manager.initialize()
@@ -109,7 +122,7 @@ async def main() -> None:
         process_guard,
         agent_watchdog,
         error_handler,
-        agent_tmux_targets=agent_tmux_targets,
+        agent_targets=agent_targets,
     )
 
     # keep watchdog registry in lock-step with spawner lifecycle — each spawn
@@ -121,7 +134,7 @@ async def main() -> None:
         lambda name: agent_watchdog.unregister_agent(name)
     )
     # any agents spawner already tracks (empty at boot, non-empty after restore)
-    for name, target in spawner.get_tmux_targets().items():
+    for name, target in spawner.get_targets().items():
         agent_watchdog.register_agent(name, target)
 
     # session_id is stable for the lifetime of this process; checkpoints share it
@@ -132,12 +145,12 @@ async def main() -> None:
         # agent_states are pulled from whatever the watchdog currently tracks
         # (can be empty on first boot — RecoveryManager re-registers on restore).
         agent_states: dict[str, Any] = {}
-        for name in list(agent_tmux_targets.keys()):
+        for name in list(agent_targets.keys()):
             state = agent_watchdog.get_state(name)
             if state is None:
                 continue
             agent_states[name] = {
-                "tmux_target": state.tmux_target,
+                "target": state.target,
                 "status": state.status,
                 "last_change_time": state.last_change_time.isoformat(),
             }

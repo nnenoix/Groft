@@ -4,9 +4,10 @@ Exercises the real wiring that turns `/spawn backend-dev` into:
     spawner.spawn → register_callback → watchdog.register_agent
                  → status_for("active") → UI WS frame
 
-Real tmux/claude are not invoked: `AgentSpawner._run_tmux` is replaced with a
-stub so every subprocess call reports success. The WebSocket server runs on a
-free port picked per test so the suite is hermetic.
+Real tmux/claude are not invoked: an `InMemoryBackend` is injected into
+`AgentSpawner`/`CommunicationServer`/`AgentWatchdog`, so every call lands
+in `backend.calls` instead of a real subprocess. The WebSocket server runs
+on a free port picked per test so the suite is hermetic.
 
 Failure modes surface as concrete assertions: if the spawn never reaches the
 watchdog, the test says so; if the UI never sees the status frame, same.
@@ -32,6 +33,7 @@ from communication.server import CommunicationServer  # noqa: E402
 from core.orchestrator import Orchestrator  # noqa: E402
 from core.spawner import AgentSpawner  # noqa: E402
 from core.watchdog.agent_watchdog import AgentWatchdog  # noqa: E402
+from tests.support.in_memory_backend import InMemoryBackend  # noqa: E402
 
 
 def _free_port() -> int:
@@ -60,20 +62,13 @@ async def _recv_until(
 
 
 @pytest_asyncio.fixture
-async def stub_tmux(monkeypatch):
-    """Replace AgentSpawner._run_tmux so tmux/claude are never invoked."""
-    calls: list[list[str]] = []
-
-    async def fake_run_tmux(args: list[str]) -> bool:
-        calls.append(list(args))
-        return True
-
-    monkeypatch.setattr(AgentSpawner, "_run_tmux", staticmethod(fake_run_tmux))
-    yield calls
+async def backend():
+    """Fresh InMemoryBackend per test so call lists don't leak across tests."""
+    yield InMemoryBackend()
 
 
 @pytest_asyncio.fixture
-async def server():
+async def server(backend):
     """Boot CommunicationServer on free ports, tear down at end of test."""
     ws_port = _free_port()
     rest_port = _free_port()
@@ -83,8 +78,8 @@ async def server():
         rest_host="127.0.0.1",
         rest_port=rest_port,
         db_path=Path(":memory:"),
-        lead_tmux_target="claudeorch:0",
-        agent_tmux_targets={"opus": "claudeorch:0"},
+        backend=backend,
+        lead_target="claudeorch:0",
     )
     await srv.start()
     try:
@@ -94,7 +89,7 @@ async def server():
 
 
 @pytest.mark.asyncio
-async def test_spawn_backend_dev_reaches_watchdog_and_ui(stub_tmux, server):
+async def test_spawn_backend_dev_reaches_watchdog_and_ui(backend, server):
     srv, ws_port, _rest_port = server
     ws_url = f"ws://127.0.0.1:{ws_port}"
 
@@ -106,10 +101,12 @@ async def test_spawn_backend_dev_reaches_watchdog_and_ui(stub_tmux, server):
         await opus_client.connect()
         try:
             spawner = AgentSpawner(
-                str(PROJECT_ROOT), str(PROJECT_ROOT / "config.yml")
+                str(PROJECT_ROOT),
+                str(PROJECT_ROOT / "config.yml"),
+                backend=backend,
             )
             orchestrator = Orchestrator(spawner)
-            watchdog = AgentWatchdog(comm_client=opus_client)
+            watchdog = AgentWatchdog(comm_client=opus_client, backend=backend)
 
             spawner.set_register_callback(
                 lambda name, target: watchdog.register_agent(name, target)
@@ -135,10 +132,13 @@ async def test_spawn_backend_dev_reaches_watchdog_and_ui(stub_tmux, server):
                 "spawner register_callback never reached watchdog; "
                 "watchdog has no state for backend-dev"
             )
+            assert backend.list_targets()["backend-dev"] == "mem:backend-dev", (
+                f"unexpected target registry: {backend.list_targets()!r}"
+            )
             state = watchdog.get_state("backend-dev")
             assert state is not None
-            assert state.tmux_target == "claudeorch:backend-dev", (
-                f"unexpected tmux_target={state.tmux_target!r}"
+            assert state.target == "mem:backend-dev", (
+                f"unexpected target={state.target!r}"
             )
 
             await opus_client.status_for("backend-dev", "active")
@@ -152,13 +152,18 @@ async def test_spawn_backend_dev_reaches_watchdog_and_ui(stub_tmux, server):
                 f"UI saw wrong status frame: {status_frame!r}"
             )
 
-            tmux_calls = stub_tmux
-            assert any(
-                "new-window" in c for c in tmux_calls
-            ), f"tmux new-window never called; calls={tmux_calls!r}"
-            assert any(
-                "send-keys" in c for c in tmux_calls
-            ), f"tmux send-keys never called; calls={tmux_calls!r}"
+            spawn_calls = [c for c in backend.calls if c[0] == "spawn"]
+            assert spawn_calls, f"backend.spawn never called; calls={backend.calls!r}"
+            assert spawn_calls[0][1] == "backend-dev", (
+                f"unexpected spawn name: {spawn_calls[0]!r}"
+            )
+            cmd_tuple = spawn_calls[0][2]
+            assert cmd_tuple[0] == "claude", (
+                f"unexpected spawn cmd[0]: {cmd_tuple!r}"
+            )
+            assert "--dangerously-skip-permissions" in cmd_tuple, (
+                f"missing --dangerously-skip-permissions: {cmd_tuple!r}"
+            )
         finally:
             await opus_client.disconnect()
     finally:
@@ -166,7 +171,7 @@ async def test_spawn_backend_dev_reaches_watchdog_and_ui(stub_tmux, server):
 
 
 @pytest.mark.asyncio
-async def test_despawn_removes_watchdog_state_and_emits_idle(stub_tmux, server):
+async def test_despawn_removes_watchdog_state_and_emits_idle(backend, server):
     srv, ws_port, _rest_port = server
     ws_url = f"ws://127.0.0.1:{ws_port}"
 
@@ -178,10 +183,12 @@ async def test_despawn_removes_watchdog_state_and_emits_idle(stub_tmux, server):
         await opus_client.connect()
         try:
             spawner = AgentSpawner(
-                str(PROJECT_ROOT), str(PROJECT_ROOT / "config.yml")
+                str(PROJECT_ROOT),
+                str(PROJECT_ROOT / "config.yml"),
+                backend=backend,
             )
             orchestrator = Orchestrator(spawner)
-            watchdog = AgentWatchdog(comm_client=opus_client)
+            watchdog = AgentWatchdog(comm_client=opus_client, backend=backend)
 
             spawner.set_register_callback(
                 lambda name, target: watchdog.register_agent(name, target)
@@ -216,7 +223,7 @@ async def test_despawn_removes_watchdog_state_and_emits_idle(stub_tmux, server):
 
 
 @pytest.mark.asyncio
-async def test_worker_disconnect_drops_agent_from_roster(stub_tmux, server):
+async def test_worker_disconnect_drops_agent_from_roster(backend, server):
     """Full lifecycle: spawn → worker WS connect → despawn → disconnect → UI
     sees roster without the worker. Covers P1.1 — UI dropping despawned
     agents from the agents list, plus idle status frame before the drop.
@@ -232,10 +239,12 @@ async def test_worker_disconnect_drops_agent_from_roster(stub_tmux, server):
         await opus_client.connect()
         try:
             spawner = AgentSpawner(
-                str(PROJECT_ROOT), str(PROJECT_ROOT / "config.yml")
+                str(PROJECT_ROOT),
+                str(PROJECT_ROOT / "config.yml"),
+                backend=backend,
             )
             orchestrator = Orchestrator(spawner)
-            watchdog = AgentWatchdog(comm_client=opus_client)
+            watchdog = AgentWatchdog(comm_client=opus_client, backend=backend)
             spawner.set_register_callback(
                 lambda name, target: watchdog.register_agent(name, target)
             )
@@ -285,7 +294,7 @@ async def test_worker_disconnect_drops_agent_from_roster(stub_tmux, server):
 
 
 @pytest.mark.asyncio
-async def test_spawn_unknown_role_is_rejected(stub_tmux, server):
+async def test_spawn_unknown_role_is_rejected(backend, server):
     srv, ws_port, _rest_port = server
     ws_url = f"ws://127.0.0.1:{ws_port}"
 
@@ -293,7 +302,9 @@ async def test_spawn_unknown_role_is_rejected(stub_tmux, server):
     await opus_client.connect()
     try:
         spawner = AgentSpawner(
-            str(PROJECT_ROOT), str(PROJECT_ROOT / "config.yml")
+            str(PROJECT_ROOT),
+            str(PROJECT_ROOT / "config.yml"),
+            backend=backend,
         )
         orchestrator = Orchestrator(spawner)
 

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Awaitable, Callable, Literal
 
 from communication.client import CommunicationClient
+from core.process import ProcessBackend
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ Status = Literal["active", "possibly_stuck", "stuck", "restarting"]
 @dataclass
 class AgentState:
     name: str
-    tmux_target: str
+    target: str
     last_output: str = ""
     last_change_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     status: Status = "active"
@@ -33,6 +34,7 @@ class AgentWatchdog:
         possibly_stuck_after: float = 180.0,
         stuck_after: float = 300.0,
         comm_client: CommunicationClient | None = None,
+        backend: ProcessBackend | None = None,
     ) -> None:
         self._poll_interval = poll_interval
         self._possibly_stuck_after = possibly_stuck_after
@@ -45,21 +47,24 @@ class AgentWatchdog:
         self._notify_cb: Callable[[str], Awaitable[None]] | None = None
         self._status_cb: Callable[[str, str], Awaitable[None]] | None = None
         self._comm_client = comm_client
+        # backend optional only so legacy callers still construct; production
+        # wiring always injects from core/main.py.
+        self._backend: ProcessBackend | None = backend
         # strong refs for fire-and-forget snapshot tasks so CPython can't GC them
         self._background_tasks: set[asyncio.Task[None]] = set()
         # consecutive _capture failures per agent — escalates to log once past threshold
         self._capture_misses: dict[str, int] = {}
 
-    def register_agent(self, name: str, tmux_target: str) -> None:
-        # preserve existing state on re-register; only refresh the tmux target if
+    def register_agent(self, name: str, target: str) -> None:
+        # preserve existing state on re-register; only refresh the target if
         # it changed. Resetting last_change_time/*_fired here would starve the
         # restart timer whenever the restore path re-registers a live agent.
         with self._lock:
             existing = self._agents.get(name)
             if existing is None:
-                self._agents[name] = AgentState(name=name, tmux_target=tmux_target)
-            elif existing.tmux_target != tmux_target:
-                existing.tmux_target = tmux_target
+                self._agents[name] = AgentState(name=name, target=target)
+            elif existing.target != target:
+                existing.target = target
 
     def unregister_agent(self, name: str) -> None:
         with self._lock:
@@ -100,7 +105,7 @@ class AgentWatchdog:
     async def get_snapshot(self, name: str) -> str:
         with self._lock:
             state = self._agents.get(name)
-            target = state.tmux_target if state is not None else None
+            target = state.target if state is not None else None
         if target is None:
             raise KeyError(name)
         return await self._capture(target)
@@ -125,7 +130,7 @@ class AgentWatchdog:
         while True:
             await asyncio.sleep(self._poll_interval)
             with self._lock:
-                items = [(s.name, s.tmux_target) for s in self._agents.values()]
+                items = [(s.name, s.target) for s in self._agents.values()]
             if not items:
                 continue
             results = await asyncio.gather(
@@ -134,7 +139,7 @@ class AgentWatchdog:
             now = datetime.now(timezone.utc)
             for (name, target), result in zip(items, results):
                 if isinstance(result, BaseException):
-                    # escalate: a dead tmux session would otherwise look "active"
+                    # escalate: a dead pane would otherwise look "active"
                     # forever because _process is skipped on failure.
                     misses = self._capture_misses.get(name, 0) + 1
                     self._capture_misses[name] = misses
@@ -242,20 +247,8 @@ class AgentWatchdog:
         except Exception:
             log.exception("watchdog snapshot send failed for %s", agent_name)
 
-    @staticmethod
-    async def _capture(target: str) -> str:
-        proc = await asyncio.create_subprocess_exec(
-            "tmux",
-            "capture-pane",
-            "-t",
-            target,
-            "-p",
-            "-S",
-            "-50",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(stderr.decode(errors="replace"))
-        return stdout.decode(errors="replace")
+    async def _capture(self, target: str) -> str:
+        if self._backend is None:
+            # defensive: matches the pre-refactor RuntimeError on missing tmux
+            raise RuntimeError("watchdog has no process backend configured")
+        return await self._backend.capture_output(target, 50)
