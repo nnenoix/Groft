@@ -46,7 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_to_unread
 """
 
 server = FastMCP("claudeorch-comms")
-client = CommunicationClient(agent_name=AGENT_NAME, ws_url=WS_URL)
+client = CommunicationClient(agent_name=AGENT_NAME, ws_url=WS_URL, role="mcp-bridge")
 _connected = False
 _connect_lock = asyncio.Lock()
 _db_conn: aiosqlite.Connection | None = None

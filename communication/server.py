@@ -280,7 +280,7 @@ class CommunicationServer:
         self._tasks_dir: Path | None = Path(tasks_dir) if tasks_dir is not None else None
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._db_lock = asyncio.Lock()
-        self._registry: dict[str, WebSocketServerProtocol] = {}
+        self._registry: dict[str, dict[str, WebSocketServerProtocol]] = {}
         self._status: dict[str, str] = {}
         # sync lock guards registry for cross-thread reads (get_connected_agents)
         self._lock = threading.Lock()
@@ -1253,6 +1253,7 @@ class CommunicationServer:
 
     async def _handle_connection(self, ws: WebSocketServerProtocol) -> None:
         agent_name: str | None = None
+        agent_role: str | None = None
         try:
             raw = await ws.recv()
             try:
@@ -1269,8 +1270,12 @@ class CommunicationServer:
             if not isinstance(name, str) or not name:
                 await ws.close(code=1008, reason="missing agent")
                 return
+            role = first.get("role", "worker")
+            if not isinstance(role, str) or not role:
+                role = "worker"
             agent_name = name
-            await self._register(agent_name, ws)
+            agent_role = role
+            await self._register(agent_name, agent_role, ws)
             await self._log_message(agent_name, None, "register", first)
             async for raw_msg in ws:
                 try:
@@ -1292,30 +1297,46 @@ class CommunicationServer:
                 "connection handler crashed for agent=%s", agent_name
             )
         finally:
-            if agent_name is not None:
-                self._unregister(agent_name, ws)
+            if agent_name is not None and agent_role is not None:
+                self._unregister(agent_name, agent_role, ws)
 
-    async def _register(self, name: str, ws: WebSocketServerProtocol) -> None:
+    # Slash commands from UI are dispatched exclusively to the "native" role so
+    # the MCP bridge (which has no slash dispatcher) never sees them.
+    _SLASH_COMMANDS: frozenset[str] = frozenset(
+        {"/spawn", "/despawn", "/restart", "/decide", "/runtest", "/rescan-handoff", "/compact"}
+    )
+
+    def _is_slash_command(self, content: str) -> bool:
+        stripped = content.strip()
+        if not stripped.startswith("/"):
+            return False
+        cmd = stripped.split()[0]
+        return cmd in self._SLASH_COMMANDS
+
+    async def _register(self, name: str, role: str, ws: WebSocketServerProtocol) -> None:
         old: WebSocketServerProtocol | None = None
         with self._lock:
-            old = self._registry.get(name)
-            self._registry[name] = ws
+            roles = self._registry.setdefault(name, {})
+            old = roles.get(role)
+            roles[role] = ws
         if old is not None and old is not ws:
-            # reconnect: evict the previous socket so the new one owns the name
+            # same (name, role) reconnect: evict the previous socket
             try:
                 await old.close(code=1000, reason="reconnect")
             except Exception:
-                log.debug("reconnect close failed for %s", name, exc_info=True)
+                log.debug("reconnect close failed for %s/%s", name, role, exc_info=True)
         # push fresh roster to UI so the agent panel reflects the new connection
         await self._broadcast_roster()
 
-    def _unregister(self, name: str, ws: WebSocketServerProtocol) -> None:
+    def _unregister(self, name: str, role: str, ws: WebSocketServerProtocol) -> None:
         removed = False
         with self._lock:
-            current = self._registry.get(name)
-            if current is ws:
-                self._registry.pop(name, None)
-                self._status.pop(name, None)
+            roles = self._registry.get(name)
+            if roles is not None and roles.get(role) is ws:
+                del roles[role]
+                if not roles:
+                    del self._registry[name]
+                    self._status.pop(name, None)
                 removed = True
         if removed:
             # fire-and-forget; sync method can't await, but roster push is best-effort.
@@ -1348,6 +1369,7 @@ class CommunicationServer:
 
     async def _broadcast_roster(self) -> None:
         # silent skip if the UI never connected; _forward_to_ui handles that too
+        # agent names appear exactly once regardless of how many roles are registered
         with self._lock:
             agents = list(self._registry.keys())
         await self._forward_to_ui({"type": "roster", "agents": agents})
@@ -1475,30 +1497,53 @@ class CommunicationServer:
 
     async def _route_direct(self, to: str, payload: dict[str, Any]) -> None:
         with self._lock:
-            target = self._registry.get(to)
-        if target is None:
+            roles = dict(self._registry.get(to, {}))
+        if not roles:
             return
-        try:
-            await target.send(json.dumps(payload))
-        except ConnectionClosed:
-            self._unregister(to, target)
-        except Exception:
-            log.warning("direct route failed: agent=%s", to, exc_info=True)
-            self._unregister(to, target)
+        content = payload.get("content", "")
+        # Slash commands from UI go only to the "native" role (orch dispatcher).
+        # The MCP-bridge role has no slash dispatcher and must not receive them.
+        if isinstance(content, str) and self._is_slash_command(content):
+            native_ws = roles.get("native")
+            if native_ws is None:
+                log.warning("slash command to %s but no native role registered", to)
+                return
+            targets = [("native", native_ws)]
+        else:
+            targets = list(roles.items())
+        data = json.dumps(payload)
+        for role, ws in targets:
+            try:
+                await ws.send(data)
+            except ConnectionClosed:
+                self._unregister(to, role, ws)
+            except Exception:
+                log.warning("direct route failed: agent=%s role=%s", to, role, exc_info=True)
+                self._unregister(to, role, ws)
 
     async def _forward_to_ui(self, payload: dict[str, Any]) -> None:
         # best-effort push to the UI viewer; any failure is swallowed (UI may be absent/gone)
+        # UI is always a single client — take any role (there's normally only one).
         with self._lock:
-            target = self._registry.get(UI_SINK_AGENT)
+            roles = self._registry.get(UI_SINK_AGENT, {})
+            target = next(iter(roles.values()), None)
         if target is None:
             return
         try:
             await target.send(json.dumps(payload))
         except ConnectionClosed:
-            self._unregister(UI_SINK_AGENT, target)
+            with self._lock:
+                roles = self._registry.get(UI_SINK_AGENT, {})
+                role = next((r for r, w in roles.items() if w is target), None)
+            if role is not None:
+                self._unregister(UI_SINK_AGENT, role, target)
         except Exception:
             log.warning("ui forward failed", exc_info=True)
-            self._unregister(UI_SINK_AGENT, target)
+            with self._lock:
+                roles = self._registry.get(UI_SINK_AGENT, {})
+                role = next((r for r, w in roles.items() if w is target), None)
+            if role is not None:
+                self._unregister(UI_SINK_AGENT, role, target)
 
     def _resolve_pane_target(self, to: str, *, fallback_to_lead: bool = False) -> str | None:
         # backend.list_targets() reflects live spawns; lead_target is the
@@ -1527,20 +1572,24 @@ class CommunicationServer:
 
     async def _route_broadcast(self, sender: str, payload: dict[str, Any]) -> None:
         with self._lock:
+            # fan-out to every role of every agent except the sender
             recipients = [
-                (name, ws) for name, ws in self._registry.items() if name != sender
+                (name, role, ws)
+                for name, roles in self._registry.items()
+                if name != sender
+                for role, ws in roles.items()
             ]
         data = json.dumps(payload)
-        for name, ws in recipients:
+        for name, role, ws in recipients:
             try:
                 await ws.send(data)
             except ConnectionClosed:
-                self._unregister(name, ws)
+                self._unregister(name, role, ws)
             except Exception:
                 log.warning(
-                    "broadcast route failed: agent=%s", name, exc_info=True
+                    "broadcast route failed: agent=%s role=%s", name, role, exc_info=True
                 )
-                self._unregister(name, ws)
+                self._unregister(name, role, ws)
 
     async def _log_message(
         self,

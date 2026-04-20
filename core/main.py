@@ -231,7 +231,7 @@ async def main() -> None:
 
     # Opus is the orchestrator — the UI and other agents address it as "opus",
     # so the WS registration name must match that to keep messages routable.
-    comm_client = CommunicationClient(agent_name="opus")
+    comm_client = CommunicationClient(agent_name="opus", role="native")
     await comm_client.connect()
 
     checkpoint_manager = CheckpointManager()
