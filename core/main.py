@@ -35,6 +35,7 @@ from core.recovery.recovery_manager import RecoveryManager
 from core.session.checkpoint import Checkpoint, CheckpointManager
 from core.spawner import AgentSpawner
 from core.watchdog.agent_watchdog import AgentWatchdog
+from core.decision_log import DecisionLog
 from git_manager.manager import GitManager
 from memory.manager import MemoryManager
 
@@ -212,6 +213,7 @@ async def main() -> None:
         tasks_dir=tasks_dir(),
         orchestrator=orchestrator,
         telegram_bridge=telegram_bridge,
+        decision_log=decision_log,
     )
     await comm_server.start()
     comm_server.set_shutdown_callback(process_guard.request_shutdown)
@@ -226,11 +228,13 @@ async def main() -> None:
     error_handler = ErrorHandler()
     git_manager = GitManager()
     memory_manager = MemoryManager()
+    decision_log = DecisionLog()
 
     await checkpoint_manager.initialize()
     await error_handler.initialize()
     await git_manager.initialize(project_root)
     await memory_manager.initialize(project_root)
+    await decision_log.initialize()
 
     recovery_manager = RecoveryManager(
         checkpoint_manager,
@@ -614,6 +618,10 @@ async def main() -> None:
         await memory_manager.close()
     except Exception:
         log.exception("teardown step failed: memory_manager.close")
+    try:
+        await decision_log.close()
+    except Exception:
+        log.exception("teardown step failed: decision_log.close")
 
 
 if __name__ == "__main__":

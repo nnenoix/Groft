@@ -259,6 +259,7 @@ class CommunicationServer:
         orchestrator: "Orchestrator | None" = None,
         telegram_bridge: Any | None = None,
         state_path: Path | None = None,
+        decision_log: Any | None = None,
     ) -> None:
         self._ws_host = ws_host
         self._ws_port = ws_port
@@ -321,6 +322,8 @@ class CommunicationServer:
         self._telegram_state_path: Path = (
             state_path if state_path is not None else claudeorch_dir() / "messenger-telegram.json"
         )
+        # Optional DecisionLog — wired by core/main.py; None → GET /decisions returns 503.
+        self._decision_log: Any | None = decision_log
         # FastAPI app is built eagerly so tests can hit it via ASGI transport
         # without binding ports through uvicorn.
         self._rest_app: FastAPI = self._build_app()
@@ -1121,6 +1124,25 @@ class CommunicationServer:
                 "current": parsed.get("current", []),
                 "done": parsed.get("done", []),
             }
+
+        @app.get("/decisions")
+        async def list_decisions(
+            agent: str | None = None,
+            limit: int = 100,
+        ) -> Any:
+            if self._decision_log is None:
+                return JSONResponse({"error": "decision log not wired"}, status_code=503)
+            try:
+                rows = await self._decision_log.list_recent(limit=limit, agent=agent or None)
+                # Normalize ts to ISO8601 with Z suffix
+                for r in rows:
+                    ts = r.get("ts", "")
+                    if isinstance(ts, str) and ts and not ts.endswith("Z") and "+" not in ts:
+                        r["ts"] = ts.replace(" ", "T") + "Z"
+                return rows
+            except Exception as exc:
+                log.exception("GET /decisions failed")
+                return JSONResponse({"error": str(exc)}, status_code=500)
 
         return app
 
