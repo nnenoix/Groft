@@ -257,6 +257,7 @@ class CommunicationServer:
         lead_target: str | None = None,
         tasks_dir: Path | str | None = None,
         orchestrator: "Orchestrator | None" = None,
+        telegram_bridge: Any | None = None,
     ) -> None:
         self._ws_host = ws_host
         self._ws_port = ws_port
@@ -309,6 +310,11 @@ class CommunicationServer:
         # can construct a server without the full spawner graph. Endpoints
         # that depend on it return 503 when it's None.
         self._orchestrator: "Orchestrator | None" = orchestrator
+        # Optional bridge reference so /start-pairing can push the same nonce
+        # into the bridge's pending-pairs dict. Without this the user's /pair
+        # command comes back "Invalid/expired code" because the two dicts are
+        # never synchronized.
+        self._telegram_bridge: Any | None = telegram_bridge
         # FastAPI app is built eagerly so tests can hit it via ASGI transport
         # without binding ports through uvicorn.
         self._rest_app: FastAPI = self._build_app()
@@ -563,6 +569,15 @@ class CommunicationServer:
             for c in expired:
                 self._telegram_pairs.pop(c, None)
             self._telegram_pairs[code] = now
+            # Mirror the nonce into the live bridge so the /pair command
+            # handler can resolve it. Two dicts, one source of truth —
+            # without this the REST endpoint and the bot don't agree on
+            # which codes are valid.
+            if self._telegram_bridge is not None:
+                try:
+                    self._telegram_bridge.register_pairing_code(code, now)
+                except Exception:
+                    log.exception("failed to mirror pair code into bridge")
             return {"code": code}
 
         @app.get("/messenger/telegram/status")

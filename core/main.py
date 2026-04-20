@@ -230,6 +230,7 @@ async def main() -> None:
         lead_target=lead_target,
         tasks_dir=tasks_dir(),
         orchestrator=orchestrator,
+        telegram_bridge=telegram_bridge,
     )
     await comm_server.start()
     comm_server.set_shutdown_callback(process_guard.request_shutdown)
