@@ -12,6 +12,7 @@ import { TasksView } from "../views/TasksView";
 import { TerminalsView } from "../views/TerminalsView";
 import { SettingsView, type UISettings } from "../views/SettingsView";
 import { MessengerSettingsView } from "../views/MessengerSettingsView";
+import { DecisionsView } from "../views/DecisionsView";
 import { useAgents, useLogs, useTasks, useUsage } from "../store/agentStore";
 
 export type NavView =
@@ -19,6 +20,7 @@ export type NavView =
   | "tasks"
   | "terminals"
   | "messengers"
+  | "decisions"
   | "settings";
 
 export interface CommandCenterState {
@@ -50,6 +52,7 @@ export const NAV_ITEMS: Array<{ key: NavView; label: string; Icon: (p: { size?: 
   { key: "tasks",      label: "Tasks",      Icon: Icon.Check },
   { key: "terminals",  label: "Terminals",  Icon: Icon.Terminal },
   { key: "messengers", label: "Каналы",     Icon: Icon.Chat },
+  { key: "decisions",  label: "Decisions",  Icon: Icon.Layers },
   { key: "settings",   label: "Settings",   Icon: Icon.Cog },
 ];
 
@@ -226,6 +229,8 @@ export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenter
           <TasksView tasks={tasks} />
         ) : view === "messengers" ? (
           <MessengerSettingsView />
+        ) : view === "decisions" ? (
+          <DecisionsView />
         ) : view === "settings" ? (
           <SettingsView state={uiSettings} setState={setUISettings} />
         ) : (
@@ -240,7 +245,7 @@ export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenter
       </main>
 
       {/* RIGHT: activity log (xl+) */}
-      {view !== "settings" && view !== "messengers" && (
+      {view !== "settings" && view !== "messengers" && view !== "decisions" && (
         <aside
           className="shrink-0 hidden xl:flex flex-col min-h-0"
           style={{
