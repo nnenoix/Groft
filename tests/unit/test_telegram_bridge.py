@@ -130,7 +130,10 @@ async def test_configure_success_writes_state(
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body == {"ok": True, "username": "my_test_bot"}
+    assert body["ok"] is True
+    assert body["username"] == "my_test_bot"
+    # bridge field is present but we don't assert its value here — orchestrator
+    # is not wired in this test so bridge starts in "failed" state, which is OK.
 
     state_path = _telegram_state_file(tmp_path)
     assert state_path.exists(), "configure should persist state file"
@@ -643,3 +646,168 @@ async def test_on_fallback_replies_hint() -> None:
     assert len(msg.replies) == 1
     assert "/ask" in msg.replies[0]
     assert "/pair" in msg.replies[0]
+
+
+# ------------------------------------------------------------------
+# 10.1 hot-boot: build_and_start_bridge + replace_telegram_bridge
+# ------------------------------------------------------------------
+
+from core.messengers.telegram import build_and_start_bridge  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_configure_hot_boots_bridge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No bridge on start → POST configure → bridge is live."""
+    srv = _build_server(tmp_path)
+    assert srv._telegram_bridge is None
+
+    # Mock getMe
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"ok": True, "result": {"id": 1, "is_bot": True, "username": "hot_bot"}}
+        )
+    transport = httpx.MockTransport(handler)
+    real_init = httpx.AsyncClient.__init__
+
+    def patched_init(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("transport", transport)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    # Stub build_and_start_bridge to avoid real polling
+    started: list[bool] = []
+
+    async def fake_build(token: str, orch: Any, backend: Any, state_path: Any, *, allowlist: Any = None) -> Any:
+        bridge = TelegramBridge(
+            token,
+            _OrchStub(),  # type: ignore[arg-type]
+            polling_factory=_noop_polling,
+        )
+        await bridge.start()
+        started.append(True)
+        return bridge
+
+    import core.messengers.telegram as tg_mod
+    monkeypatch.setattr(tg_mod, "build_and_start_bridge", fake_build)
+    # Inject a stub orchestrator so the handler doesn't skip hot-boot
+    srv._orchestrator = _OrchStub()  # type: ignore[assignment]
+
+    async with _client(srv) as c:
+        resp = await c.post(
+            "/messenger/telegram/configure",
+            json={"token": "123456:ABCdef_ghi-JKL"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert started == [True]
+    assert srv._telegram_bridge is not None
+    assert srv._telegram_bridge.running is True
+    # cleanup
+    await srv._telegram_bridge.stop()
+
+
+@pytest.mark.asyncio
+async def test_configure_reconfigure_swaps_bridge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First bridge running → re-configure → old stopped, new running."""
+    srv = _build_server(tmp_path)
+    srv._orchestrator = _OrchStub()  # type: ignore[assignment]
+
+    # Plant an existing bridge
+    old_bridge = TelegramBridge(
+        "111111:OLDtoken_abc-DEF",
+        _OrchStub(),  # type: ignore[arg-type]
+        polling_factory=_noop_polling,
+    )
+    await old_bridge.start()
+    srv._telegram_bridge = old_bridge
+
+    # Mock getMe
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"ok": True, "result": {"id": 2, "is_bot": True, "username": "new_bot"}}
+        )
+    transport = httpx.MockTransport(handler)
+    real_init = httpx.AsyncClient.__init__
+
+    def patched_init(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("transport", transport)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    async def fake_build(token: str, orch: Any, backend: Any, state_path: Any, *, allowlist: Any = None) -> Any:
+        bridge = TelegramBridge(
+            token,
+            _OrchStub(),  # type: ignore[arg-type]
+            polling_factory=_noop_polling,
+        )
+        await bridge.start()
+        return bridge
+
+    import core.messengers.telegram as tg_mod
+    monkeypatch.setattr(tg_mod, "build_and_start_bridge", fake_build)
+
+    async with _client(srv) as c:
+        resp = await c.post(
+            "/messenger/telegram/configure",
+            json={"token": "222222:NEWtoken_xyz-ABC"},
+        )
+
+    assert resp.status_code == 200
+    # Old bridge must be stopped
+    assert old_bridge.running is False
+    # New bridge must be running
+    assert srv._telegram_bridge is not None
+    assert srv._telegram_bridge is not old_bridge
+    assert srv._telegram_bridge.running is True
+    await srv._telegram_bridge.stop()
+
+
+@pytest.mark.asyncio
+async def test_configure_bridge_start_failure_doesnt_break_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """build_and_start_bridge returns None → endpoint still returns 200 with bridge=failed."""
+    srv = _build_server(tmp_path)
+    srv._orchestrator = _OrchStub()  # type: ignore[assignment]
+
+    # Mock getMe success
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"ok": True, "result": {"id": 3, "is_bot": True, "username": "fail_bot"}}
+        )
+    transport = httpx.MockTransport(handler)
+    real_init = httpx.AsyncClient.__init__
+
+    def patched_init(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> None:
+        kwargs.setdefault("transport", transport)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    # build_and_start_bridge always returns None
+    async def fail_build(token: str, orch: Any, backend: Any, state_path: Any, *, allowlist: Any = None) -> None:
+        return None
+
+    import core.messengers.telegram as tg_mod
+    monkeypatch.setattr(tg_mod, "build_and_start_bridge", fail_build)
+
+    async with _client(srv) as c:
+        resp = await c.post(
+            "/messenger/telegram/configure",
+            json={"token": "333333:FAILtoken_zzz-GGG"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["bridge"] == "failed"
+    # State file should still be written
+    assert _telegram_state_file(tmp_path).exists()

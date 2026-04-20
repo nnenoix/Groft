@@ -25,6 +25,7 @@ class AgentState:
     wake_fired: bool = False
     restart_fired: bool = False
     notification_fired: bool = False
+    skip_liveness: bool = False
 
 
 class AgentWatchdog:
@@ -55,14 +56,17 @@ class AgentWatchdog:
         # consecutive _capture failures per agent — escalates to log once past threshold
         self._capture_misses: dict[str, int] = {}
 
-    def register_agent(self, name: str, target: str) -> None:
+    def register_agent(self, name: str, target: str, *, skip_liveness: bool = False) -> None:
         # preserve existing state on re-register; only refresh the target if
         # it changed. Resetting last_change_time/*_fired here would starve the
         # restart timer whenever the restore path re-registers a live agent.
+        # skip_liveness is set once on first registration and never overwritten.
         with self._lock:
             existing = self._agents.get(name)
             if existing is None:
-                self._agents[name] = AgentState(name=name, target=target)
+                self._agents[name] = AgentState(
+                    name=name, target=target, skip_liveness=skip_liveness
+                )
             elif existing.target != target:
                 existing.target = target
 
@@ -186,6 +190,8 @@ class AgentWatchdog:
                         )
                 if status_changed_to is not None and self._status_cb is not None:
                     await self._emit_status(name, status_changed_to)
+                return
+            if state.skip_liveness:
                 return
             elapsed = (now - state.last_change_time).total_seconds()
             fire_wake = False
