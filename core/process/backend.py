@@ -34,12 +34,14 @@ class ProcessBackend(Protocol):
         text: str,
         *,
         press_enter: bool = True,
+        submit: bool = True,
     ) -> bool:
         """Send multi-line text to the target's stdin/pane.
 
         Backend implementations are responsible for shell-injection safety
         (tmux uses `send-keys -l --`; Windows writes raw to stdin).
-        `press_enter=False` skips the trailing Enter (rarely needed).
+        `press_enter=False` / `submit=False` skips the trailing submit
+        keystroke (rarely needed — used when the caller will send it manually).
         """
         ...
 

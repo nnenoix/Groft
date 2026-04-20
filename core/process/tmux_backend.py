@@ -5,10 +5,16 @@ codebase: window create/kill (spawner), send-keys (server, session_manager),
 capture-pane (watchdog). Linux behaviour is bit-identical with the pre-refactor
 implementation — same args, same logging, same return codes.
 
-Security note: `send_text` uses the multi-line `send-keys -l --` + bare
-`send-keys Enter` sequence. The `-l` flag types literal text instead of
-interpreting it as a key sequence, which is what blocks shell-style injection
-through chat content. Callers MUST NOT bypass this method.
+Security note: `send_text` uses the multi-line `send-keys -l --` + C-j submit
+sequence. The `-l` flag types literal text instead of interpreting it as a key
+sequence, which is what blocks shell-style injection through chat content.
+Callers MUST NOT bypass this method.
+
+Submit semantics: claude TUI (prompt-toolkit-based) interprets a bare `Enter`
+as newline in multi-line mode rather than as submit. `C-j` (LF, 0x0A) is
+recognised by prompt-toolkit as the submit binding and reliably triggers message
+dispatch. Empirically verified 2026-04-20: `send-keys -l -- "echo x"` followed
+by `send-keys C-j` executed the command in a bash+tmux window.
 """
 from __future__ import annotations
 
@@ -64,6 +70,7 @@ class TmuxBackend:
         text: str,
         *,
         press_enter: bool = True,
+        submit: bool = True,
     ) -> bool:
         # split on newlines so literal typing per-line + Enter preserves multi-line payloads.
         # `-l --` makes tmux type each line as literal characters — this is the
@@ -89,8 +96,11 @@ class TmuxBackend:
                         len(lines),
                     )
                     return False
-        if press_enter:
-            return await self._tmux_send(target, ["Enter"])
+        if press_enter or submit:
+            # Send the actual submit sequence for claude TUI.
+            # A single bare Enter is interpreted as newline in multi-line mode;
+            # C-j (LF, 0x0A) acts as submit in prompt-toolkit-based TUIs.
+            return await self._tmux_send(target, ["C-j"])
         return True
 
     async def kill(self, target: Target) -> bool:
