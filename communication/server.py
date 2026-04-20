@@ -1367,9 +1367,9 @@ class CommunicationServer:
             # don't run a WS consumer, so the pane is the actual inbox.
             # Exception: opus reads its inbox through the claudeorch-comms MCP
             # bridge (get_messages), so a pane forward would double the
-            # message in opus's TUI. `_resolve_pane_target` would also fall
-            # back to `lead_target` here, which IS opus's pane — so the
-            # guard has to be explicit, not "only if target is registered".
+            # message in opus's TUI. SNAPSHOT_SINK_AGENT is excluded explicitly;
+            # unknown targets are silently dropped by _forward_to_pane (no
+            # fallback to lead_target).
             if isinstance(content, str) and to != SNAPSHOT_SINK_AGENT:
                 mode = msg.get("mode")
                 model = msg.get("model")
@@ -1500,20 +1500,23 @@ class CommunicationServer:
             log.warning("ui forward failed", exc_info=True)
             self._unregister(UI_SINK_AGENT, target)
 
-    def _resolve_pane_target(self, to: str) -> str | None:
+    def _resolve_pane_target(self, to: str, *, fallback_to_lead: bool = False) -> str | None:
         # backend.list_targets() reflects live spawns; lead_target is the
         # boot-time fallback (typically the orchestrator's own pane).
         if self._backend is not None:
             target = self._backend.list_targets().get(to)
             if target is not None:
                 return target
-        return self._lead_target
+        if fallback_to_lead:
+            return self._lead_target
+        return None
 
     async def _forward_to_pane(self, to: str, content: str) -> None:
         if self._backend is None:
             return
         target = self._resolve_pane_target(to)
         if target is None:
+            log.info("pane forward skipped: unknown target=%s", to)
             return
         # injection guard lives in the backend's send_text — see TmuxBackend.
         ok = await self._backend.send_text(target, content)
