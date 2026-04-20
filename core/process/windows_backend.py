@@ -113,8 +113,9 @@ class WindowsBackend:
         text: str,
         *,
         press_enter: bool = True,
+        submit: bool = True,
     ) -> bool:
-        return await asyncio.to_thread(self._send_text_sync, target, text, press_enter)
+        return await asyncio.to_thread(self._send_text_sync, target, text, press_enter or submit)
 
     def _send_text_sync(self, target: Target, text: str, press_enter: bool) -> bool:
         entry = self._find_entry(target)
