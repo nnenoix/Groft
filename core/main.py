@@ -95,11 +95,8 @@ async def _maybe_start_telegram_bridge(
     """
     state_path = claudeorch_dir() / "messenger-telegram.json"
     try:
-        # Lazy import so the messengers package isn't dragged into smoke runs
-        # that don't need it. Module-level import would be fine too — this is
-        # just defensive in case the package gains heavier deps later.
         from core.messengers.telegram import (
-            TelegramBridge,
+            build_and_start_bridge,
             is_valid_token_format,
             read_state_file,
         )
@@ -109,32 +106,16 @@ async def _maybe_start_telegram_bridge(
     state = read_state_file(state_path)
     token = state.get("token")
     if not isinstance(token, str) or not is_valid_token_format(token):
-        # Silent return — most deployments never configure Telegram.
         return None
     allowlist: set[int] = set()
     paired = state.get("paired_user_id")
     if isinstance(paired, int):
         allowlist.add(paired)
-    try:
-        bridge = TelegramBridge(
-            token,
-            orchestrator,
-            allowlist=allowlist,
-            backend=backend,
-            state_path=state_path,
-        )
-    except ValueError:
-        log.warning("telegram bridge rejected on-disk token as malformed")
-        return None
-    except Exception:
-        log.exception("telegram bridge construction failed")
-        return None
-    try:
-        await bridge.start()
-    except Exception:
-        log.exception("telegram bridge start failed")
-        return None
-    log.info("telegram bridge started (paired=%s)", paired)
+    bridge = await build_and_start_bridge(
+        token, orchestrator, backend, state_path, allowlist=allowlist
+    )
+    if bridge is not None:
+        log.info("telegram bridge started (paired=%s)", paired)
     return bridge
 
 
@@ -594,9 +575,10 @@ async def main() -> None:
             pass
         except Exception:
             log.exception("teardown step failed: await bg_task")
-    if telegram_bridge is not None:
+    _active_tg_bridge = comm_server._telegram_bridge
+    if _active_tg_bridge is not None:
         try:
-            await telegram_bridge.stop()
+            await _active_tg_bridge.stop()
         except Exception:
             log.exception("teardown step failed: telegram_bridge.stop")
     if discord_bridge is not None:

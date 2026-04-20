@@ -480,3 +480,37 @@ class TelegramBridge:
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             return
+
+
+async def build_and_start_bridge(
+    token: str,
+    orchestrator: "Orchestrator",
+    backend: "ProcessBackend | None",
+    state_path: Path,
+    *,
+    allowlist: set[int] | None = None,
+) -> "TelegramBridge | None":
+    """Construct + start a bridge. Returns None on any failure (logged)."""
+    if not is_valid_token_format(token):
+        log.warning("build_and_start_bridge: invalid token format")
+        return None
+    try:
+        bridge = TelegramBridge(
+            token,
+            orchestrator,
+            allowlist=allowlist,
+            backend=backend,
+            state_path=state_path,
+        )
+    except ValueError:
+        log.warning("build_and_start_bridge: token rejected as malformed")
+        return None
+    except Exception:
+        log.exception("build_and_start_bridge: construction failed")
+        return None
+    try:
+        await bridge.start()
+    except Exception:
+        log.exception("build_and_start_bridge: start failed")
+        return None
+    return bridge

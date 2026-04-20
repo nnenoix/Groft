@@ -258,6 +258,7 @@ class CommunicationServer:
         tasks_dir: Path | str | None = None,
         orchestrator: "Orchestrator | None" = None,
         telegram_bridge: Any | None = None,
+        state_path: Path | None = None,
     ) -> None:
         self._ws_host = ws_host
         self._ws_port = ws_port
@@ -315,6 +316,11 @@ class CommunicationServer:
         # command comes back "Invalid/expired code" because the two dicts are
         # never synchronized.
         self._telegram_bridge: Any | None = telegram_bridge
+        # State path for hot-boot: configure handler reads paired_user_id from
+        # the persisted file so the new bridge inherits the existing pairing.
+        self._telegram_state_path: Path = (
+            state_path if state_path is not None else claudeorch_dir() / "messenger-telegram.json"
+        )
         # FastAPI app is built eagerly so tests can hit it via ASGI transport
         # without binding ports through uvicorn.
         self._rest_app: FastAPI = self._build_app()
@@ -420,6 +426,16 @@ class CommunicationServer:
         # endpoint returns 200 immediately and the shutdown work runs in the
         # background — Tauri's 2s http timeout never trips.
         self._shutdown_callback = fn
+
+    async def replace_telegram_bridge(self, new_bridge: Any | None) -> None:
+        """Stop the current bridge (if any) and replace with new_bridge."""
+        old = self._telegram_bridge
+        self._telegram_bridge = new_bridge
+        if old is not None:
+            try:
+                await old.stop()
+            except Exception:
+                log.exception("replace_telegram_bridge: old bridge stop failed")
 
     async def broadcast(self, sender: str, content: str) -> None:
         payload = {"type": "broadcast", "from": sender, "content": content}
@@ -549,8 +565,32 @@ class CommunicationServer:
                 return JSONResponse(
                     {"ok": False, "error": "persist failed"}, status_code=500
                 )
+            # Hot-boot the bridge so the new token is live without restarting orch.
+            bridge_status = "failed"
+            try:
+                from core.messengers.telegram import build_and_start_bridge
+                allw: set[int] = set()
+                if isinstance(persisted.get("paired_user_id"), int):
+                    allw.add(persisted["paired_user_id"])
+                if self._orchestrator is not None:
+                    new_bridge = await build_and_start_bridge(
+                        token,
+                        self._orchestrator,
+                        self._backend,
+                        self._telegram_state_path,
+                        allowlist=allw,
+                    )
+                    await self.replace_telegram_bridge(new_bridge)
+                    if new_bridge is not None:
+                        bridge_status = "running"
+                    else:
+                        log.warning("telegram configure: bridge start failed, persist ok")
+                else:
+                    log.warning("telegram configure: no orchestrator, bridge not started")
+            except Exception:
+                log.exception("telegram configure: hot-boot raised")
             return JSONResponse(
-                {"ok": True, "username": persisted["username"]}
+                {"ok": True, "username": persisted["username"], "bridge": bridge_status}
             )
 
         @app.post("/messenger/telegram/start-pairing")
