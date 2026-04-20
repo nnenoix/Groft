@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -22,6 +23,8 @@ from core.vision import (
     ask_about_text,
     capture_screen,
 )
+
+log = logging.getLogger(__name__)
 
 AGENT_NAME = os.environ.get("AGENT_NAME", "unknown")
 WS_URL = os.environ.get("WS_URL", "ws://localhost:8765")
@@ -236,6 +239,50 @@ async def see_agent_pane(agent_name: str, question: str) -> str:
         return await ask_about_text(pane, question, agent_label=agent_name)
     except VisionError as exc:
         return f"Vision error: {exc}"
+
+
+_decision_log: "DecisionLog | None" = None
+_decision_log_lock = asyncio.Lock()
+
+
+async def _get_decision_log() -> "DecisionLog":
+    global _decision_log
+    async with _decision_log_lock:
+        if _decision_log is not None:
+            return _decision_log
+        from core.decision_log import DecisionLog
+        dl = DecisionLog(claudeorch_dir() / "decisions.duckdb")
+        await dl.initialize()
+        _decision_log = dl
+        return _decision_log
+
+
+@server.tool()
+async def log_decision(
+    category: str,
+    chosen: str,
+    alternatives: list[str] | None = None,
+    reason: str = "",
+    task_id: str | None = None,
+) -> str:
+    """Записать архитектурное решение в общий журнал.
+
+    agent берётся из AGENT_NAME env. Возвращает '✓ decision #<id> logged'.
+    """
+    try:
+        dl = await _get_decision_log()
+        id_ = await dl.append(
+            agent=AGENT_NAME,
+            category=category,
+            chosen=chosen,
+            alternatives=alternatives,
+            reason=reason if reason else "unspecified",
+            task_id=task_id,
+        )
+        return f"✓ decision #{id_} logged"
+    except Exception as exc:
+        log.exception("log_decision failed")
+        return f"✗ decision log failed: {exc}"
 
 
 if __name__ == "__main__":
