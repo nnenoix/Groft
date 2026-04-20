@@ -285,5 +285,60 @@ async def log_decision(
         return f"✗ decision log failed: {exc}"
 
 
+_context_store: "ContextStore | None" = None
+_context_store_lock = asyncio.Lock()
+
+
+def _get_context_store() -> "ContextStore":
+    global _context_store
+    if _context_store is not None:
+        return _context_store
+    from core.context_store import ContextStore
+    store = ContextStore(claudeorch_dir() / "context.duckdb")
+    store.initialize()
+    _context_store = store
+    return _context_store
+
+
+@server.tool()
+async def get_relevant_context(query: str, k: int = 5) -> str:
+    """Найти релевантные фрагменты из памяти этого агента.
+
+    Возвращает plain-text dump: [source] text... по одному чанку на блок.
+    """
+    try:
+        agent = AGENT_NAME
+        loop = asyncio.get_running_loop()
+        store = await loop.run_in_executor(None, _get_context_store)
+        results = await loop.run_in_executor(None, store.search, agent, query, k)
+        if not results:
+            return "(no relevant context)"
+        blocks = [
+            f"[{r['source']} score={r['score']:.2f}]\n{r['text']}" for r in results
+        ]
+        return "\n\n---\n\n".join(blocks)
+    except Exception as exc:
+        log.exception("get_relevant_context failed")
+        return f"(context retrieval failed: {exc})"
+
+
+@server.tool()
+async def reindex_my_context() -> str:
+    """Переиндексировать свой memory-файл (вызвать после обновления памяти)."""
+    try:
+        agent = AGENT_NAME
+        loop = asyncio.get_running_loop()
+        store = await loop.run_in_executor(None, _get_context_store)
+        project_root = Path(__file__).resolve().parents[1]
+        memory_root = project_root / "memory"
+        count = await loop.run_in_executor(
+            None, store.reindex_agent, agent, memory_root
+        )
+        return f"reindexed {agent} ({count} chunks)"
+    except Exception as exc:
+        log.exception("reindex_my_context failed")
+        return f"reindex failed: {exc}"
+
+
 if __name__ == "__main__":
     server.run()
