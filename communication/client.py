@@ -16,9 +16,15 @@ class ClientNotConnectedError(RuntimeError):
 
 
 class CommunicationClient:
-    def __init__(self, agent_name: str, ws_url: str = "ws://localhost:8765") -> None:
+    def __init__(
+        self,
+        agent_name: str,
+        ws_url: str = "ws://localhost:8765",
+        role: str = "worker",
+    ) -> None:
         self._agent_name = agent_name
         self._ws_url = ws_url
+        self._role = role
         self._ws: WebSocketClientProtocol | None = None
 
     def _require_ws(self) -> WebSocketClientProtocol:
@@ -33,7 +39,7 @@ class CommunicationClient:
         self._ws = await websockets.connect(self._ws_url)
         # register is mandatory first frame — server closes 1008 otherwise
         await self._ws.send(
-            json.dumps({"type": "register", "agent": self._agent_name})
+            json.dumps({"type": "register", "agent": self._agent_name, "role": self._role})
         )
 
     async def disconnect(self) -> None:
