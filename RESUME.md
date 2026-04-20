@@ -1,146 +1,123 @@
-# Groft Resume Plan — 2026-04-20
+# Groft — Resume Plan
 
-Проект поставлен в ящик. Этот файл — точка возобновления для любой будущей Claude-сессии.
+## Для чего это вообще
 
-## Как использовать этот файл
+Один постоянно живой агент (backend-dev или frontend-dev) в tmux, который:
+- Помнит твой кодовый стиль и историю решений между сессиями
+- Принимает задачи через Telegram пока ты не за компьютером
+- Не умирает ночью — watchdog перезапускает если завис
 
-Запусти новую Claude-сессию в `/mnt/d/orchkerstr/`, прочитай:
-1. `CLAUDE.md` — поведенческие правила проекта
-2. **Этот файл** — текущее состояние + pending work
-3. `architecture/audit-phase12.md` — bug list, с которого надо стартовать
-4. `architecture/decisions.md` — архитектурная история
-
-После этого у тебя полный контекст.
+Это и есть ценность Groft. Не "4 параллельных агента", не DuckDB-стэк, не MessengerBus.
 
 ---
 
-## Экономическое ограничение (важно)
+## Что сделано и работает
 
-**Team-режим Groft (параллельные tmux-агенты) не окупается на Max-подписке.** В сессии 2026-04-20 мы сожгли 5h rolling window за ~3 часа активной работы с 4 параллельными агентами (opus + backend-dev + frontend-dev + reviewer). Причины: shared 5h window на все claude-CLI процессы, `xhigh` thinking effort, полный CLAUDE.md в контексте каждой reply.
+9 PR смержено в master. Код написан и протестирован (192 passed).
 
-**Рабочая модель:**
-- **Solo agent, long-running** (1 backend-dev накапливает memory сутками, доступен через Telegram) — подписка окупается, агент 80% idle.
-- **Team-mode** — использовать только на API-биллинге, не подписке. Либо Max-20x + осторожная параллельность.
-- **Task tool Claude Code** — для burst-параллели дешевле AgentSpawner, используй его внутри живого AgentSpawner-агента.
+Реально полезное из сделанного:
+- **Telegram bridge** — агент доступен с телефона (но /pair пока не работает полностью — см. ниже)
+- **WS registry + routing** — агенты адресуются по имени, messages доходят
+- **Watchdog** — не пингует opus (лидера), пингует workers
+- **tmux C-j submit** — MCP send_message теперь реально сабмитит
+- **Memory per agent** — накапливается между сессиями
 
-Это уже отражено в `CLAUDE.md` раздел «Dogfood-правило». Будущему Claude: не запускай 4 агента сразу если не знаешь, как оплачивается сессия.
-
----
-
-## Что сделано в сессии 2026-04-20 (всё смержено в master)
-
-| # | Фаза | PR | Коммит |
-|---|------|----|----|
-| 1 | Phase 10: hot-boot telegram bridge + watchdog skip_liveness для opus | #17 | `745ddf5` |
-| 2 | Phase 8: Decision log (DuckDB + MCP + REST + backfill) | #18 | `53223ef` |
-| 3 | Phase 8.5: UI Decisions tab | #19 | `217f9e5` |
-| 4 | Phase 8.6: CLAUDE.md rule for log_decision | — | `9930024` |
-| 5 | Phase 9: Context retrieval (DuckDB FTS + MCP) | #20 | `e6586b8` |
-| 6 | Phase 11.3: tmux submit C-j fix | #21 | `329ff96` |
-| 7 | Phase 11.2: no fallback-to-opus for unknown targets | #22 | `f0345b5` |
-| 8 | Phase 11.1: role-aware WS registry | #23 | `608ac5d` |
-| 9 | Phase 12 audit report (bugs found, НЕ починены) | — | `a149210` (ветка `chore/phase12-audit`) |
-
-Тесты: **192 passed, 5 skipped** на момент останова.
+Сделанное что скорее всего не нужно (но пусть лежит, не мешает):
+- DuckDB decision log (красиво, но никто не читает)
+- DuckDB context FTS (было проще читать весь memory файл)
+- DuckDB messages/memory-log/git-history (5 баз данных на один оркестратор — перебор)
+- Vision screenshot (полезно но не критично)
+- iMessage bridge (только macOS, мало кому нужно)
 
 ---
 
-## Куда продолжать (по приоритету)
+## Что сломано прямо сейчас
 
-### Стартовая точка: Phase 12 — P0 блокер
+### P0 — оркестратор не запустится после рестарта
 
-**Файл:** `core/main.py:227` — `UnboundLocalError` на старте оркестратора.
+**Файл:** `core/main.py` около строки 227
 
-`decision_log` передаётся в `CommunicationServer(decision_log=decision_log)` на строке 227, но объявляется через `decision_log = DecisionLog()` на строке 242. Python считает переменную локальной на всей функции → обращение до присвоения = падение.
+`decision_log` передаётся в `CommunicationServer(decision_log=decision_log)` до того как объявляется. Python падает с `UnboundLocalError` при старте.
 
-**Что делать первым в новой сессии:**
-1. `git checkout master && git pull`
-2. Прочитать `architecture/audit-phase12.md` (полный список: 1 P0, 4 P1, 4 P2, 4 P3)
-3. Починить P0 (три строки: поднять `DecisionLog()` выше в функции) — это разблокирует рестарт оркестратора
-4. Убедиться что orch стартует: `python3 core/main.py --smoke`
-5. Смержить `chore/phase12-audit` в master, потом закрыть Phase 12 по PR на каждый P1
+**Фикс:** переместить `decision_log = DecisionLog(...)` выше по коду, до вызова `CommunicationServer`. Три строки.
 
-### Phase 12 — P1 (после P0)
+**Проверка:** `python3 core/main.py --smoke` должен вернуть 0.
 
-Все детали в `architecture/audit-phase12.md`:
-- P1.1: websockets deprecated API → мигрировать на `websockets.asyncio.client.connect` / `server.serve`
-- P1.2: `_context_store_lock` не используется → обернуть `_get_context_store` в `async with lock`
-- P1.3: `get_messages` без ROLLBACK в MCP server → `try/except/finally` с `db.rollback()`
-- P1.4: `TmuxBackend.spawn` shell-инъекция через env → переделать на list-args без shell
+### Telegram /pair не работает
 
-### Phase 13–20 (roadmap)
-
-Проставлен в taskstore (см. Task IDs ниже). Все ТЗ — в этом же файле ниже.
-
-| Task | Фаза | Что |
-|------|------|-----|
-| #26 | 13 | Hot-reload orch без killa opus pane'а. Выбрать один из 4 подходов (A/B/C/D в брифе ниже). **Самая болезненная боль.** |
-| #27 | 14 | Unified AgentRegistry — source-of-truth для AGENT_NAME / tmux / MCP / messenger. |
-| #28 | 15 | Watchdog heartbeat вместо таймера — не спамить работающего агента. |
-| #29 | 16 | Memory v2: structured sections, rotation, shared.md auto-compress. |
-| #30 | 17 | Decision log — либо hard-enforce через MCP hook, либо удалить DuckDB layer (markdown достаточен). |
-| #31 | 18 | MessengerBus — 4 мессенджера копируют политику/pair-flow. Вынести в общий bus. |
-| #32 | 19 | Secret management — токены из plain JSON в OS keyring. Критично перед opensource-релизом. |
-| #33 | 20 | Startup observability: `/ready` endpoint + per-subsystem progress. |
+Пофикшено в коммите `9234105` (sync server↔bridge pair codes) но оркестратор не рестартован. После P0 фикса + рестарта должно заработать. Если нет — смотреть `communication/server.py` `/messenger/telegram/start-pairing`.
 
 ---
 
-## Phase 13 — детальный бриф (самая важная фаза)
+## Что делать в следующей сессии
 
-**Проблема:** любой фикс в `communication/` или `core/` = `stop.sh` + `start.sh` = убитый opus pane = потерянный контекст. Сейчас это главный источник трения в саморазработке.
+### Шаг 1 — P0 фикс (5 минут)
+```python
+# core/main.py — переместить ДО CommunicationServer(...)
+decision_log = DecisionLog(claudeorch_dir() / "decisions.duckdb")
+await decision_log.initialize()
+```
+Потом `python3 core/main.py --smoke` зелёный → коммит → пуш.
 
-**4 подхода, выбрать через `log_decision`:**
-- A) Subprocess-per-subsystem (WS/REST/watchdog/messenger как child-процессы main orch, main держит opus WS-client постоянно)
-- B) `importlib.reload()` для module-level changes (быстрый но хрупкий)
-- C) Checkpoint + `os.execv()` self-replace (orch замещает свой бинарь, грузит checkpoint — opus всё равно теряется)
-- D) Sidecar pattern (orch = тонкий WS-proxy, вся логика в reloadable sidecar-процессе)
+### Шаг 2 — Рестарт + тест Telegram (10 минут)
+```bash
+./stop.sh
+./start.sh
+```
+Открыть UI → Messenger → Telegram → Start Pairing → скопировать код → в Telegram-бот написать `/pair КОД`. Должно спарироваться.
 
-**Acceptance:** opus сам применяет фикс в `communication/server.py` без killa своего pane'а.
+Потом отправить `/ask opus привет` через бота. Проверить что opus ответил.
 
----
+### Шаг 3 — Один нормальный рабочий сценарий (solo mode)
 
-## Technical debt (не в task-списке, но держать в голове)
+Не запускать 4 агента сразу. Запустить одного backend-dev:
+```
+Orchestrator.spawn_role("backend-dev")
+```
+Дать ему задачу через UI или Telegram. Наблюдать в tmux. Вот это и есть продукт.
 
-Из `memory/project_groft_dogfood_bugs.md` (теперь помечено FIXED):
-- Явно починено в Phase 11: tmux Enter, fallback echo, role-aware registry
-- Осталось: MCP inbox persistence через `.claudeorch/mcp_inbox.db` (opus сказал "already fixed" через SQLite, но не верифицировано в этой сессии — проверить)
+Если работает → записать как "getting started" scenario в README.
 
-Из `architecture/decisions.md` (вручную ведётся opus'ом):
-- Запись 2026-04-20 — self-dogfood валидация работает, но экономика team-mode на Max сомнительна (см. выше)
+### Шаг 4 — Watchdog heartbeat (если есть время)
 
----
+Сейчас watchdog стучит по таймеру. Если backend-dev 20 минут молча пишет код — watchdog думает что он завис.
 
-## Running state при останове (может быть уже не актуально)
-
-- tmux session `claudeorch` с 4 окнами: `opus` / `backend-dev` / `frontend-dev` / `reviewer`
-- Все процессы clude-CLI получили rate-limit "You've hit your limit · resets 11pm (Asia/Tomsk)"
-- Оркестратор PID 2725, `.claudeorch/orch.pid`, жив
-- Ветка `chore/phase12-audit` — только audit-report, ни одного fix commit'а
-
-**При возобновлении:**
-1. `./stop.sh` — чистая остановка
-2. Применить P0 фикс локально (мелкая правка `core/main.py`)
-3. `./start.sh` — проверить что orch поднимается
-4. Дальше по плану
+Простой фикс: tmux content diff. Если `capture-pane` текущий ≠ предыдущему за последние N минут — агент жив. Один файл, 30 строк.
 
 ---
 
-## Ссылки
+## Чего НЕ делать
 
-- **Product name:** Groft (repo codename: claudeorch)
-- **Repo:** `https://github.com/nnenoix/Groft`
-- **Architecture decisions:** `architecture/decisions.md`
-- **Audit report:** `architecture/audit-phase12.md`
-- **Dogfood bugs (fixed):** `~/.claude/projects/-mnt-d-orchkerstr/memory/project_groft_dogfood_bugs.md`
-- **Phase 10 security TODO:** `~/.claude/projects/-mnt-d-orchkerstr/memory/project_phase10_token_revoke.md`
+- Не запускать 4 агента параллельно на Max подписке — сожжёт лимит за 3 часа
+- Не добавлять новые DuckDB таблицы без явной необходимости — их и так 5
+- Не трогать Phase 14-20 из старого плана — это инфраструктура ради инфраструктуры
+- Не рефакторить MessengerBus — нет второго пользователя который страдает от дублирования
 
 ---
 
-## Для будущего Claude: короткий checklist перед стартом
+## Если хочется двигаться дальше после базовой версии
 
-- [ ] Прочитал `CLAUDE.md` целиком (особенно «Dogfood-правило» и «AgentSpawner vs Task tool»)
-- [ ] Прочитал этот файл
-- [ ] Прочитал `architecture/audit-phase12.md` (P0 + P1 перед стартом любых новых фаз)
-- [ ] Проверил `git status` и актуальные ветки (`git branch -a`)
-- [ ] Запустил `pytest tests/ -q` — убедился что baseline зелёный (ожидается ~192 passed)
-- [ ] Перед spawn'ом агентов — честно оцени лимит пользователя, предложи solo-режим если Max-5x
+Приоритет по реальной пользе:
+1. **Hot-reload** — apply фикс без убийства opus pane. Подход: subprocess-per-subsystem (WS/REST/watchdog как child-процессы). Одна правка в `core/main.py`.
+2. **README с getting started** — сейчас проект непонятен без часового объяснения
+3. **Telegram /ask → ответ назад** — сейчас однонаправленно. Добавить `reply(chat_id, result)` когда агент завершил задачу.
+4. **Секреты в keyring** — токены из plain JSON в OS keyring. Критично перед открытым репозиторием.
+
+---
+
+## Ключевые файлы
+
+| Что | Где |
+|-----|-----|
+| P0 блокер | `core/main.py` ~строка 227 |
+| Telegram bridge | `core/messengers/telegram.py` |
+| WS сервер | `communication/server.py` |
+| Watchdog | `core/watchdog/agent_watchdog.py` |
+| Запуск | `./start.sh` / `./stop.sh` |
+| Audit bugs P1 | `architecture/audit-phase12.md` |
+
+## Экономика
+
+Max-5x → solo агент: хватает надолго (агент 80% idle).
+Max-5x → team 4 агента: сгорит за 3 часа активной работы.
+API биллинг → team режим без ограничений, но дороже.
