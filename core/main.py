@@ -35,6 +35,7 @@ from core.recovery.recovery_manager import RecoveryManager
 from core.session.checkpoint import Checkpoint, CheckpointManager
 from core.spawner import AgentSpawner
 from core.watchdog.agent_watchdog import AgentWatchdog
+from core.context_store import ContextStore
 from core.decision_log import DecisionLog
 from git_manager.manager import GitManager
 from memory.manager import MemoryManager
@@ -206,6 +207,16 @@ async def main() -> None:
     # the operator has completed configure-then-pair via the UI. A missing
     # discord.py dep degrades to a warning; the orchestrator keeps going.
     discord_bridge = await _maybe_start_discord_bridge(orchestrator, backend)
+
+    context_store = ContextStore(claudeorch_dir() / "context.duckdb")
+    context_store.initialize()
+    _memory_root = project_root / "memory"
+    for _agent_name in set(orchestrator.known_roles()) | {"opus", "_shared"}:
+        try:
+            _count = context_store.reindex_agent(_agent_name, _memory_root)
+            log.info("context: reindexed %s (%d chunks)", _agent_name, _count)
+        except Exception:
+            log.exception("context reindex failed agent=%s", _agent_name)
 
     comm_server = CommunicationServer(
         backend=backend,
@@ -618,6 +629,10 @@ async def main() -> None:
         await memory_manager.close()
     except Exception:
         log.exception("teardown step failed: memory_manager.close")
+    try:
+        context_store.close()
+    except Exception:
+        log.exception("teardown step failed: context_store.close")
     try:
         await decision_log.close()
     except Exception:
