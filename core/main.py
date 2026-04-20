@@ -270,6 +270,14 @@ async def main() -> None:
     # any agents spawner already tracks (empty at boot, non-empty after restore)
     for name, target in spawner.get_targets().items():
         agent_watchdog.register_agent(name, target)
+    # opus is the orchestrator — it idles between tasks and must never trigger
+    # wake/restart callbacks. Register explicitly with skip_liveness so the
+    # watchdog still sends snapshots to UI but ignores elapsed-time logic.
+    agent_watchdog.register_agent(
+        "opus",
+        agent_targets.get("opus", _DEFAULT_LEAD_TARGET),
+        skip_liveness=True,
+    )
 
     # session_id is stable for the lifetime of this process; checkpoints share it
     session_id = str(uuid4())
