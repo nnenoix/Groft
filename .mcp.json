@@ -4,8 +4,7 @@
       "command": "python3",
       "args": ["/mnt/d/orchkerstr/communication/mcp_server.py"],
       "env": {
-        "AGENT_NAME": "${AGENT_NAME}",
-        "WS_URL": "ws://localhost:8765"
+        "AGENT_NAME": "opus"
       }
     }
   }

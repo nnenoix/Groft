@@ -1,13 +1,2 @@
-pyyaml
 duckdb
-fastapi
-uvicorn
-websockets
-aiosqlite
-httpx
 mcp
-beautifulsoup4>=4.12
-watchfiles
-python-telegram-bot>=21
-discord.py>=2.4
-mss>=9.0
