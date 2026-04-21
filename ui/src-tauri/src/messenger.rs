@@ -1,7 +1,6 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
 // Project root resolution uses current_dir(); this is fine when the dev server
 // is launched from the repo root but not for packaged builds.
@@ -40,23 +39,3 @@ pub fn get_messenger_status(messenger: String) -> Result<String, String> {
     }
 }
 
-#[tauri::command]
-pub fn run_tmux_command(command: String) -> Result<String, String> {
-    let output = Command::new("tmux")
-        .args([
-            "send-keys",
-            "-t",
-            "claudeorch:0",
-            command.as_str(),
-            "Enter",
-        ])
-        .output()
-        .map_err(|e| e.to_string())?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(stderr);
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    Ok(stdout)
-}

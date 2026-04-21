@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Icon } from "../components/icons";
 import { MODEL_OPTIONS } from "../data/models";
@@ -6,6 +6,12 @@ import { MODEL_OPTIONS } from "../data/models";
 const NAME_RE = /^[a-z][a-z0-9-]{1,30}$/;
 const AVAILABLE_TOOLS = ["Read", "Write", "Edit", "Bash", "Grep", "Glob"] as const;
 const MODELS_URL = "http://localhost:8766/agents/models";
+
+interface AgentEntry {
+  filename: string;
+  name: string;
+  content: string;
+}
 
 function buildContent(input: {
   name: string;
@@ -39,12 +45,198 @@ function errorToString(e: unknown): string {
   return String(e);
 }
 
-interface AgentCreateViewProps {
+function parseAgentEntry(raw: string): AgentEntry | null {
+  const sepIdx = raw.indexOf("|");
+  if (sepIdx < 0) return null;
+  const filename = raw.slice(0, sepIdx);
+  const content = raw.slice(sepIdx + 1);
+  const name = filename.replace(/\.md$/, "");
+  return { filename, name, content };
+}
+
+async function loadAgents(): Promise<AgentEntry[]> {
+  try {
+    const raws = await invoke<string[]>("list_agent_files");
+    return raws.map(parseAgentEntry).filter((e): e is AgentEntry => e !== null);
+  } catch {
+    return [];
+  }
+}
+
+export function SubagentsView() {
+  const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    const list = await loadAgents();
+    setAgents(list);
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const selectedAgent = useMemo(
+    () => agents.find((a) => a.name === selected) ?? null,
+    [agents, selected],
+  );
+
+  async function handleDelete(agent: AgentEntry) {
+    const confirmed = window.confirm(`Удалить субагента «${agent.name}»?`);
+    if (!confirmed) return;
+    try {
+      await invoke<void>("delete_agent_file", { name: agent.name });
+      if (selected === agent.name) setSelected(null);
+      await refresh();
+    } catch (err) {
+      window.alert(`Не удалось удалить: ${errorToString(err)}`);
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <header
+        className="shrink-0 flex items-center justify-between px-[var(--pad-5)] py-[var(--pad-3)]"
+        style={{ borderBottom: "1px solid var(--border)" }}
+      >
+        <div>
+          <div
+            className="text-[11px] uppercase tracking-[0.2em] font-semibold"
+            style={{ color: "var(--text-muted)" }}
+          >
+            Субагенты
+          </div>
+          <h2 className="font-display font-semibold text-[18px] tracking-tight">
+            .claude/agents
+          </h2>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowCreate(true)}
+          className="btn btn-primary text-[12px]"
+        >
+          <Icon.Plus size={14} />
+          <span>Создать</span>
+        </button>
+      </header>
+
+      <div className="flex-1 min-h-0 flex">
+        <aside
+          className="shrink-0 overflow-y-auto"
+          style={{
+            width: 260,
+            borderRight: "1px solid var(--border)",
+            background: "var(--bg-secondary)",
+          }}
+        >
+          {!loaded && (
+            <div
+              className="p-[var(--pad-4)] text-[12px]"
+              style={{ color: "var(--text-muted)" }}
+            >
+              Загружаю…
+            </div>
+          )}
+          {loaded && agents.length === 0 && (
+            <div
+              className="p-[var(--pad-4)] text-[12px] leading-relaxed"
+              style={{ color: "var(--text-muted)" }}
+            >
+              Субагентов ещё нет. Нажмите <b>Создать</b>, чтобы сделать первого.
+            </div>
+          )}
+          <ul>
+            {agents.map((a) => {
+              const active = a.name === selected;
+              return (
+                <li key={a.filename}>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(a.name)}
+                    className="w-full text-left px-[var(--pad-4)] py-2 flex items-center gap-2 transition-colors"
+                    style={{
+                      background: active ? "var(--accent-light)" : "transparent",
+                      color: active ? "var(--accent-hover)" : "var(--text-primary)",
+                      borderBottom: "1px solid var(--border)",
+                    }}
+                  >
+                    <Icon.Users size={12} />
+                    <span className="font-mono text-[12.5px]">{a.name}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </aside>
+
+        <main className="flex-1 min-h-0 overflow-y-auto p-[var(--pad-5)]">
+          {!selectedAgent && (
+            <div
+              className="text-[12.5px] leading-relaxed max-w-[480px]"
+              style={{ color: "var(--text-muted)" }}
+            >
+              <p>
+                Субагенты — это шаблоны в <span className="font-mono">.claude/agents/*.md</span>,
+                которые Opus использует через <span className="font-mono">Task tool</span>.
+                Каждый шаблон задаёт роль, модель, набор инструментов и системный промпт.
+              </p>
+              <p className="mt-3">Выберите субагента слева или создайте нового.</p>
+            </div>
+          )}
+          {selectedAgent && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-display font-semibold text-[15px]">
+                  {selectedAgent.name}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => handleDelete(selectedAgent)}
+                  className="btn btn-ghost text-[11.5px]"
+                  style={{ color: "var(--status-stuck)" }}
+                >
+                  <Icon.Trash size={12} />
+                  <span>Удалить</span>
+                </button>
+              </div>
+              <pre
+                className="whitespace-pre-wrap font-mono text-[12px] p-[var(--pad-4)] rounded-md"
+                style={{
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-primary)",
+                }}
+              >
+                {selectedAgent.content}
+              </pre>
+            </div>
+          )}
+        </main>
+      </div>
+
+      {showCreate && (
+        <CreateAgentModal
+          onClose={() => setShowCreate(false)}
+          onCreated={async (name) => {
+            setShowCreate(false);
+            await refresh();
+            setSelected(name);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+interface CreateAgentModalProps {
   onClose: () => void;
   onCreated: (name: string) => void;
 }
 
-export function AgentCreateView({ onClose, onCreated }: AgentCreateViewProps) {
+function CreateAgentModal({ onClose, onCreated }: CreateAgentModalProps) {
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [role, setRole] = useState("");
@@ -165,9 +357,9 @@ export function AgentCreateView({ onClose, onCreated }: AgentCreateViewProps) {
         <div className="shrink-0 p-[var(--pad-5)] flex items-start gap-3" style={{ borderBottom: "1px solid var(--border)" }}>
           <div className="flex-1 min-w-0">
             <div className="text-[11px] uppercase tracking-[0.2em] font-semibold mb-1" style={{ color: "var(--text-muted)" }}>
-              Новый агент
+              Новый субагент
             </div>
-            <h2 className="font-display font-semibold text-[18px] tracking-tight">Создать агента</h2>
+            <h2 className="font-display font-semibold text-[18px] tracking-tight">Создать субагента</h2>
             <p className="text-[12px] mt-0.5" style={{ color: "var(--text-muted)" }}>
               Файл сохранится в <span className="font-mono" style={{ color: "var(--text-code)" }}>.claude/agents/{name || "<name>"}.md</span>
             </p>
@@ -326,7 +518,7 @@ export function AgentCreateView({ onClose, onCreated }: AgentCreateViewProps) {
             className="btn btn-primary text-[12px]"
             style={{ opacity: canSubmit ? 1 : 0.55, cursor: canSubmit ? "pointer" : "not-allowed" }}
           >
-            {submitting ? "Создаю…" : "Создать агента"}
+            {submitting ? "Создаю…" : "Создать субагента"}
           </button>
         </div>
       </form>
@@ -334,4 +526,4 @@ export function AgentCreateView({ onClose, onCreated }: AgentCreateViewProps) {
   );
 }
 
-export default AgentCreateView;
+export default SubagentsView;

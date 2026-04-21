@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { TerminalBlock } from "../components/TerminalBlock";
-import type { AgentState, AgentStatus } from "../store/agentStore";
 
 export type CliDetectResult = {
   installed: boolean;
@@ -238,27 +236,6 @@ export function SetupView({ detect, onRecheck }: Props) {
   const allDone = STEPS.every((s) => statuses[s.id] === "done");
   const activeStatus = activeStep ? statuses[activeStep.id] : "pending";
 
-  // Fake agent shape so we can reuse TerminalBlock's chrome (name, status
-  // dot, monospace body). No real agent is involved.
-  const fakeAgent: AgentState = useMemo(() => {
-    const statusMap: Record<StepStatus, AgentStatus> = {
-      pending: "idle",
-      running: "active",
-      waiting_user: "stuck",
-      done: "idle",
-      failed: "stuck",
-    };
-    return {
-      name: activeStep ? activeStep.id : "setup",
-      role: "setup",
-      status: statusMap[activeStatus],
-      currentAction: activeStep?.hint ?? "",
-      currentTask: "first-run setup",
-      model: activeStep?.title ?? "",
-      terminalOutput: [],
-    };
-  }, [activeStep, activeStatus]);
-
   const activeLines = activeStep ? streams[activeStep.id] : [];
 
   return (
@@ -289,12 +266,11 @@ export function SetupView({ detect, onRecheck }: Props) {
             </div>
           )}
           <div style={styles.terminalInner}>
-            <TerminalBlock
-              agent={fakeAgent}
+            <TerminalPanel
+              title={activeStep ? activeStep.id : "setup"}
+              subtitle={activeStep?.title ?? ""}
               lines={activeLines}
               live={activeStatus === "running"}
-              expandable={false}
-              heightClass="h-[60vh]"
             />
           </div>
           <div style={styles.actions}>
@@ -365,6 +341,78 @@ export function SetupView({ detect, onRecheck }: Props) {
             })}
           </ol>
         </aside>
+      </div>
+    </div>
+  );
+}
+
+interface TerminalPanelProps {
+  title: string;
+  subtitle: string;
+  lines: string[];
+  live: boolean;
+}
+
+function TerminalPanel({ title, subtitle, lines, live }: TerminalPanelProps) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [autoscroll, setAutoscroll] = useState(true);
+
+  useEffect(() => {
+    if (autoscroll && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [lines, autoscroll]);
+
+  function onScroll() {
+    const el = bodyRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 6;
+    if (!atBottom && autoscroll) setAutoscroll(false);
+    else if (atBottom && !autoscroll) setAutoscroll(true);
+  }
+
+  return (
+    <div
+      className="rounded-[var(--radius-lg)] overflow-hidden flex flex-col h-full min-h-0"
+      style={{
+        background: "var(--bg-terminal)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <div
+        className="px-[var(--pad-4)] py-[var(--pad-2)] flex items-center gap-2 shrink-0"
+        style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-secondary)" }}
+      >
+        <span
+          className="font-mono text-[12px] font-semibold"
+          style={{ color: "var(--text-primary)" }}
+        >
+          {title}
+        </span>
+        <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+          · {subtitle}
+        </span>
+        <div className="flex-1" />
+        {live && (
+          <span
+            className="text-[10px] uppercase tracking-wider font-semibold"
+            style={{ color: "var(--accent-primary)" }}
+          >
+            live
+          </span>
+        )}
+      </div>
+      <div
+        ref={bodyRef}
+        onScroll={onScroll}
+        className="flex-1 min-h-0 overflow-y-auto px-[var(--pad-4)] py-[var(--pad-3)] font-mono text-[12px] leading-[1.55]"
+        style={{ color: "var(--text-primary)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+      >
+        {lines.length === 0 ? (
+          <div style={{ color: "var(--text-muted)" }}>—</div>
+        ) : (
+          lines.map((line, i) => <div key={i}>{line}</div>)
+        )}
       </div>
     </div>
   );
