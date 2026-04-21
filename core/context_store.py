@@ -87,41 +87,51 @@ class ContextStore:
             log.warning("FTS index creation failed (may already exist): %s", e)
 
     def reindex_agent(self, agent: str, memory_root: Path) -> int:
-        assert self._conn is not None
-        # Delete old chunks for this agent
-        self._conn.execute("DELETE FROM chunks WHERE agent = ?", [agent])
+        """Reindex an agent's memory corpus.
 
-        # Determine which files to read
-        if agent == "_shared":
-            files = [("_shared", memory_root / "shared.md")]
-        else:
-            files = [(agent, memory_root / f"{agent}.md")]
+        All markdown files directly under memory_root and under
+        memory_root/archive/ are indexed as `_shared` regardless of agent
+        name — there is no per-agent split in the current layout
+        (solo-opus model). The `agent` argument is kept for API
+        compatibility and to scope the DELETE.
+        """
+        assert self._conn is not None
+        # Delete old chunks. The current layout indexes everything as
+        # _shared, so purge that bucket plus the legacy per-agent bucket
+        # if it exists.
+        self._conn.execute(
+            "DELETE FROM chunks WHERE agent IN (?, ?)", [agent, "_shared"]
+        )
+
+        files = self._collect_memory_files(memory_root)
 
         chunks_inserted = 0
-        for agent_label, path in files:
+        for path in files:
             if not path.exists():
-                log.debug("memory file not found: %s", path)
                 continue
-            text = path.read_text(encoding="utf-8")
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as e:
+                log.warning("failed to read memory file %s: %s", path, e)
+                continue
+            rel = path.relative_to(memory_root)
             chunks = _chunk_text(text)
             for idx, chunk in enumerate(chunks):
                 chunk = chunk.strip()
                 if not chunk:
                     continue
-                # derive source from first line
                 first_line = chunk.splitlines()[0].lstrip("#").strip()
                 slug = _slugify(first_line) if first_line else str(idx)
-                source = f"memory/{path.name}#{slug}"
+                source = f"memory/{rel.as_posix()}#{slug}"
                 chunk_id = self._conn.execute(
                     "SELECT nextval('chunks_id_seq')"
                 ).fetchone()[0]
                 self._conn.execute(
                     "INSERT INTO chunks (id, agent, source, text) VALUES (?, ?, ?, ?)",
-                    [chunk_id, agent_label, source, chunk],
+                    [chunk_id, "_shared", source, chunk],
                 )
                 chunks_inserted += 1
 
-        # Rebuild FTS index after mutations
         try:
             self._conn.execute(
                 "PRAGMA create_fts_index('chunks', 'id', 'text', overwrite=1);"
@@ -130,6 +140,26 @@ class ContextStore:
             log.warning("FTS index rebuild failed: %s", e)
 
         return chunks_inserted
+
+    @staticmethod
+    def _collect_memory_files(memory_root: Path) -> list[Path]:
+        """All .md files under memory_root (top level + archive/).
+
+        Sorted for deterministic chunk IDs across reindex runs. Skips
+        hidden files and anything outside the allowed subtree.
+        """
+        if not memory_root.exists():
+            return []
+        top_level = sorted(
+            p for p in memory_root.glob("*.md") if not p.name.startswith(".")
+        )
+        archive_dir = memory_root / "archive"
+        archived = (
+            sorted(p for p in archive_dir.glob("*.md") if not p.name.startswith("."))
+            if archive_dir.is_dir()
+            else []
+        )
+        return top_level + archived
 
     def search(self, agent: str, query: str, k: int = 5) -> list[dict[str, Any]]:
         assert self._conn is not None

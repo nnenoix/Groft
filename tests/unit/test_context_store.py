@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.context_store import ContextStore, _chunk_text  # noqa: E402
 
-SAMPLE_MD = """# Backend Dev Memory
+SAMPLE_MD = """# Shared Memory
 
 ---
 
@@ -58,64 +58,81 @@ def test_initialize_idempotent(tmp_path: Path) -> None:
 def test_reindex_and_search_roundtrip(store: ContextStore, tmp_path: Path) -> None:
     mem = tmp_path / "memory"
     mem.mkdir()
-    (mem / "backend-dev.md").write_text(SAMPLE_MD, encoding="utf-8")
+    (mem / "shared.md").write_text(SAMPLE_MD, encoding="utf-8")
 
-    count = store.reindex_agent("backend-dev", mem)
+    count = store.reindex_agent("opus", mem)
     assert count >= 3  # 3 sections
 
-    results = store.search("backend-dev", "watchdog skip_liveness", k=3)
+    results = store.search("opus", "watchdog skip_liveness", k=3)
     assert len(results) >= 1
     top = results[0]
     assert "watchdog" in top["text"].lower() or "skip_liveness" in top["text"].lower()
-    assert top["agent"] == "backend-dev"
+    assert top["agent"] == "_shared"
+    assert top["source"].startswith("memory/shared.md#")
     assert top["score"] is not None
 
 
 def test_reindex_replaces_old_chunks(store: ContextStore, tmp_path: Path) -> None:
     mem = tmp_path / "memory"
     mem.mkdir()
-    (mem / "backend-dev.md").write_text(SAMPLE_MD, encoding="utf-8")
+    (mem / "shared.md").write_text(SAMPLE_MD, encoding="utf-8")
 
-    store.reindex_agent("backend-dev", mem)
+    store.reindex_agent("opus", mem)
     first_count = store._conn.execute(
-        "SELECT count(*) FROM chunks WHERE agent='backend-dev'"
+        "SELECT count(*) FROM chunks WHERE agent='_shared'"
     ).fetchone()[0]
     assert first_count >= 3
 
-    # Reindex with only 1 section
-    (mem / "backend-dev.md").write_text(
+    # Reindex with only 1 section — count must shrink, not duplicate.
+    (mem / "shared.md").write_text(
         "# Short\n\n---\n\nOnly one chunk here.", encoding="utf-8"
     )
-    store.reindex_agent("backend-dev", mem)
+    store.reindex_agent("opus", mem)
     second_count = store._conn.execute(
-        "SELECT count(*) FROM chunks WHERE agent='backend-dev'"
+        "SELECT count(*) FROM chunks WHERE agent='_shared'"
     ).fetchone()[0]
     assert second_count < first_count
     assert second_count >= 1
 
 
-def test_search_respects_agent_and_shared(store: ContextStore, tmp_path: Path) -> None:
+def test_reindex_picks_up_archive_subdir(store: ContextStore, tmp_path: Path) -> None:
+    """Phase 16 contract: files under memory/archive/ must be searchable."""
+    mem = tmp_path / "memory"
+    (mem / "archive").mkdir(parents=True)
+    (mem / "shared.md").write_text(
+        "# Shared\n\n---\n\nLive note about pandas.", encoding="utf-8"
+    )
+    (mem / "archive" / "session-log-2026-01-01.md").write_text(
+        "# Archived blocks\n\n---\n\n"
+        "## 2026-01-01 — ancient task\n"
+        "- Notes:\n  - forgotten_keyword_xyz appears only here",
+        encoding="utf-8",
+    )
+
+    count = store.reindex_agent("opus", mem)
+    assert count >= 2
+
+    results = store.search("opus", "forgotten_keyword_xyz", k=5)
+    assert len(results) >= 1
+    assert any(
+        "archive" in r["source"] and "forgotten_keyword_xyz" in r["text"]
+        for r in results
+    )
+
+
+def test_reindex_is_deterministic_across_runs(store: ContextStore, tmp_path: Path) -> None:
+    """Sorted file collection → same chunk count on repeat reindex."""
     mem = tmp_path / "memory"
     mem.mkdir()
-    (mem / "agent-a.md").write_text(
-        "# Agent A\n\nThis is agent-a specific content about pandas.", encoding="utf-8"
-    )
-    (mem / "agent-b.md").write_text(
-        "# Agent B\n\nThis is agent-b specific content about numpy.", encoding="utf-8"
-    )
-    (mem / "shared.md").write_text(
-        "# Shared\n\nThis is shared content about common tools.", encoding="utf-8"
+    (mem / "shared.md").write_text(SAMPLE_MD, encoding="utf-8")
+    (mem / "session-log.md").write_text(
+        "# Session Log\n\n---\n\n## task one\n- Changed: a.py", encoding="utf-8"
     )
 
-    store.reindex_agent("agent-a", mem)
-    store.reindex_agent("agent-b", mem)
-    store.reindex_agent("_shared", mem)
-
-    results = store.search("agent-a", "pandas", k=10)
-    agents_found = {r["agent"] for r in results}
-    # Should only see agent-a and _shared, never agent-b
-    assert "agent-b" not in agents_found
-    assert "agent-a" in agents_found or "_shared" in agents_found
+    c1 = store.reindex_agent("opus", mem)
+    c2 = store.reindex_agent("opus", mem)
+    assert c1 == c2
+    assert c1 >= 4
 
 
 def test_chunk_text_respects_max_chars() -> None:

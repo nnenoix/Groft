@@ -68,12 +68,18 @@ async def ingest_report(
     decision_appender: DecisionAppender | None = None,
     memory_root: Path,
     task_id: str | None = None,
+    rotate_keep: int | None = None,
 ) -> dict[str, Any]:
     """Persist a subagent report. Returns {"session_log": path, "decision_ids": [...]}.
 
     Pure I/O — no MCP-level wiring, no locks. Caller supplies the decision
     appender (normally `DecisionLog.append`). memory_root is the project's
     memory/ directory; session-log.md and shared.md live inside it.
+
+    If rotate_keep is set and session-log.md now has more blocks than that,
+    the oldest overflow is moved into memory/archive/ via
+    memory_rotation.rotate_session_log. Pass None to skip rotation (e.g.
+    for tests that want a flat log).
     """
     ts = _iso_now()
     changed = list(changed_files or [])
@@ -126,8 +132,18 @@ async def ingest_report(
         with shared_path.open("a", encoding="utf-8") as fh:
             fh.write(shared_block)
 
+    rotation: dict[str, Any] | None = None
+    if rotate_keep is not None:
+        from core.memory_rotation import rotate_session_log
+        try:
+            rotation = rotate_session_log(memory_root, keep=rotate_keep)
+        except Exception:
+            log.exception("rotate_session_log failed")
+            rotation = None
+
     return {
         "session_log": str(session_log_path),
         "decision_ids": decision_ids,
         "timestamp": ts,
+        "rotation": rotation,
     }
