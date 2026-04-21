@@ -553,13 +553,10 @@ function SystemSettings({ state, setState }: {
             </button>
           </div>
         </SettingRow>
-        <SettingRow label="Checkpoints">
-          <Input value=".groft/recovery.duckdb" mono width={280} />
-        </SettingRow>
         <SettingRow label="Shared memory TTL" hint="Сколько хранить общую память">
           <Slider min={7} max={90} value={30} suffix="д" />
         </SettingRow>
-        <SettingRow label="Очистить кэш" hint="Логи + duckdb чекпоинты · не трогает код">
+        <SettingRow label="Очистить кэш" hint="Логи + memory archive · не трогает код">
           <button className="btn btn-outline text-[11.5px]">Очистить · 142 MB</button>
         </SettingRow>
       </SettingsSection>

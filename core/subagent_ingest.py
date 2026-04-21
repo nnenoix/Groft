@@ -3,31 +3,44 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 log = logging.getLogger(__name__)
-
-
-DecisionAppender = Callable[..., Awaitable[int]]
 
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _format_decision_line(dec: dict[str, Any]) -> str | None:
+    category = dec.get("category")
+    chosen = dec.get("chosen")
+    if not isinstance(category, str) or not isinstance(chosen, str):
+        return None
+    reason = dec.get("reason")
+    if not isinstance(reason, str) or not reason:
+        reason = "unspecified"
+    alternatives = dec.get("alternatives")
+    alt_str = ""
+    if isinstance(alternatives, list) and alternatives:
+        alt_str = f" (alt: {', '.join(str(a) for a in alternatives)})"
+    return f"  - [{category}] {chosen}{alt_str} — {reason}"
+
+
 def _session_log_block(
     ts: str,
     did: str,
     changed_files: list[str],
-    decision_ids: list[int],
+    decision_lines: list[str],
     questions: list[str],
     notes: list[str],
 ) -> str:
     parts = [f"## {ts} — {did.strip() or '(no summary)'}"]
     if changed_files:
         parts.append(f"- Changed: {', '.join(changed_files)}")
-    if decision_ids:
-        parts.append(f"- Decisions: {', '.join(f'#{i}' for i in decision_ids)}")
+    if decision_lines:
+        parts.append("- Decisions:")
+        parts.extend(decision_lines)
     if questions:
         joined = " / ".join(q.strip() for q in questions if q.strip())
         if joined:
@@ -65,21 +78,24 @@ async def ingest_report(
     questions: list[str] | None = None,
     memory_notes: list[str] | None = None,
     agent: str = "opus",
-    decision_appender: DecisionAppender | None = None,
+    decision_appender: Any = None,
     memory_root: Path,
     task_id: str | None = None,
     rotate_keep: int | None = None,
 ) -> dict[str, Any]:
-    """Persist a subagent report. Returns {"session_log": path, "decision_ids": [...]}.
+    """Persist a subagent report to session-log.md + shared.md.
 
-    Pure I/O — no MCP-level wiring, no locks. Caller supplies the decision
-    appender (normally `DecisionLog.append`). memory_root is the project's
-    memory/ directory; session-log.md and shared.md live inside it.
+    Phase 17: DuckDB decision log retired. Decisions are written inline
+    into the session-log block as bullet lines — searchable via
+    get_relevant_context's markdown grep. The `decision_appender` argument
+    is accepted and ignored for backward compatibility with old callers.
+
+    Returns: {"session_log": path, "decisions_recorded": [line, ...],
+    "timestamp": iso, "rotation": dict | None}.
 
     If rotate_keep is set and session-log.md now has more blocks than that,
     the oldest overflow is moved into memory/archive/ via
-    memory_rotation.rotate_session_log. Pass None to skip rotation (e.g.
-    for tests that want a flat log).
+    memory_rotation.rotate_session_log.
     """
     ts = _iso_now()
     changed = list(changed_files or [])
@@ -87,39 +103,19 @@ async def ingest_report(
     notes = list(memory_notes or [])
     decision_list = list(decisions or [])
 
-    decision_ids: list[int] = []
-    if decision_list and decision_appender is not None:
-        for dec in decision_list:
-            if not isinstance(dec, dict):
-                continue
-            category = dec.get("category")
-            chosen = dec.get("chosen")
-            if not isinstance(category, str) or not isinstance(chosen, str):
-                log.warning("skipping malformed decision: %r", dec)
-                continue
-            alternatives = dec.get("alternatives")
-            if alternatives is not None and not isinstance(alternatives, list):
-                alternatives = None
-            reason = dec.get("reason")
-            if not isinstance(reason, str) or not reason:
-                reason = "unspecified"
-            dec_task_id = dec.get("task_id") if isinstance(dec.get("task_id"), str) else task_id
-            try:
-                id_ = await decision_appender(
-                    agent=agent,
-                    category=category,
-                    chosen=chosen,
-                    alternatives=alternatives,
-                    reason=reason,
-                    task_id=dec_task_id,
-                )
-                decision_ids.append(int(id_))
-            except Exception:
-                log.exception("decision append failed for %r", dec)
+    decision_lines: list[str] = []
+    for dec in decision_list:
+        if not isinstance(dec, dict):
+            continue
+        line = _format_decision_line(dec)
+        if line is None:
+            log.warning("skipping malformed decision: %r", dec)
+            continue
+        decision_lines.append(line)
 
     session_log_path = memory_root / "session-log.md"
     _ensure_session_log(session_log_path)
-    block = _session_log_block(ts, did, changed, decision_ids, qs, notes)
+    block = _session_log_block(ts, did, changed, decision_lines, qs, notes)
     with session_log_path.open("a", encoding="utf-8") as fh:
         fh.write(block)
 
@@ -143,7 +139,7 @@ async def ingest_report(
 
     return {
         "session_log": str(session_log_path),
-        "decision_ids": decision_ids,
+        "decisions_recorded": decision_lines,
         "timestamp": ts,
         "rotation": rotation,
     }

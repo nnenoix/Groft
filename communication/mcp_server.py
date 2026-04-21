@@ -10,57 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp.server.fastmcp import FastMCP
 
-from core.paths import claudeorch_dir
-
 log = logging.getLogger(__name__)
 
 AGENT_NAME = os.environ.get("AGENT_NAME", "opus")
 
 server = FastMCP("claudeorch-comms")
-
-
-_decision_log: "DecisionLog | None" = None
-_decision_log_lock = asyncio.Lock()
-
-
-async def _get_decision_log() -> "DecisionLog":
-    global _decision_log
-    async with _decision_log_lock:
-        if _decision_log is not None:
-            return _decision_log
-        from core.decision_log import DecisionLog
-        dl = DecisionLog(claudeorch_dir() / "decisions.duckdb")
-        await dl.initialize()
-        _decision_log = dl
-        return _decision_log
-
-
-@server.tool()
-async def log_decision(
-    category: str,
-    chosen: str,
-    alternatives: list[str] | None = None,
-    reason: str = "",
-    task_id: str | None = None,
-) -> str:
-    """Записать архитектурное решение в общий журнал.
-
-    agent берётся из AGENT_NAME env. Возвращает '✓ decision #<id> logged'.
-    """
-    try:
-        dl = await _get_decision_log()
-        id_ = await dl.append(
-            agent=AGENT_NAME,
-            category=category,
-            chosen=chosen,
-            alternatives=alternatives,
-            reason=reason if reason else "unspecified",
-            task_id=task_id,
-        )
-        return f"✓ decision #{id_} logged"
-    except Exception as exc:
-        log.exception("log_decision failed")
-        return f"✗ decision log failed: {exc}"
 
 
 _context_store: "ContextStore | None" = None
@@ -73,9 +27,9 @@ async def _get_context_store() -> "ContextStore":
         if _context_store is not None:
             return _context_store
         from core.context_store import ContextStore
-        loop = asyncio.get_running_loop()
-        store = ContextStore(claudeorch_dir() / "context.duckdb")
-        await loop.run_in_executor(None, store.initialize)
+        project_root = Path(__file__).resolve().parents[1]
+        memory_root = project_root / "memory"
+        store = ContextStore(db_path=memory_root, memory_root=memory_root)
         _context_store = store
         return _context_store
 
@@ -102,23 +56,6 @@ async def get_relevant_context(query: str, k: int = 5) -> str:
 
 
 @server.tool()
-async def reindex_my_context() -> str:
-    """Переиндексировать свой memory-файл (вызвать после обновления памяти)."""
-    try:
-        store = await _get_context_store()
-        loop = asyncio.get_running_loop()
-        project_root = Path(__file__).resolve().parents[1]
-        memory_root = project_root / "memory"
-        count = await loop.run_in_executor(
-            None, store.reindex_agent, AGENT_NAME, memory_root
-        )
-        return f"reindexed {AGENT_NAME} ({count} chunks)"
-    except Exception as exc:
-        log.exception("reindex_my_context failed")
-        return f"reindex failed: {exc}"
-
-
-@server.tool()
 async def ingest_subagent_report(
     did: str,
     changed_files: list[str] | None = None,
@@ -127,7 +64,7 @@ async def ingest_subagent_report(
     memory_notes: list[str] | None = None,
     task_id: str | None = None,
 ) -> str:
-    """Записать отчёт субагента в session-log.md + DecisionLog + shared.md.
+    """Записать отчёт субагента в session-log.md + shared.md.
 
     Контракт: каждый Agent()-вызов завершается структурированным отчётом,
     который opus передаёт сюда. Ничего не теряется после смерти суба.
@@ -135,14 +72,15 @@ async def ingest_subagent_report(
     - did: одно предложение «что сделал».
     - changed_files: пути изменённых файлов.
     - decisions: [{category, chosen, alternatives?, reason, task_id?}, ...]
-      — каждое уходит в DecisionLog, id возвращается в session-log.
+      — сейчас записываются в session-log.md как перечень (DuckDB-лог
+      decisions retired в Phase 17); если нужен формальный реестр, opus
+      редактирует `architecture/decisions.md` напрямую.
     - questions: open questions для opus.
     - memory_notes: заметки уровня «помнить всегда» — идут в shared.md.
     """
     try:
         from core.memory_rotation import DEFAULT_KEEP
         from core.subagent_ingest import ingest_report
-        dl = await _get_decision_log()
         project_root = Path(__file__).resolve().parents[1]
         result = await ingest_report(
             did=did,
@@ -151,15 +89,14 @@ async def ingest_subagent_report(
             questions=questions,
             memory_notes=memory_notes,
             agent=AGENT_NAME,
-            decision_appender=dl.append,
+            decision_appender=None,
             memory_root=project_root / "memory",
             task_id=task_id,
             rotate_keep=DEFAULT_KEEP,
         )
         dec_summary = (
-            f"{len(result['decision_ids'])} decisions #"
-            + ",#".join(str(i) for i in result["decision_ids"])
-            if result["decision_ids"]
+            f"{len(result['decisions_recorded'])} decisions in session-log"
+            if result.get("decisions_recorded")
             else "0 decisions"
         )
         rot = result.get("rotation") or {}
