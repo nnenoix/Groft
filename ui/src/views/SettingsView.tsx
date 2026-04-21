@@ -3,7 +3,6 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../components/icons";
 import { Avatar } from "../components/primitives";
 import { MODEL_OPTIONS as MODELS } from "../data/models";
-import { useAgents } from "../store/agentStore";
 
 /* ---- Types ---- */
 
@@ -603,14 +602,12 @@ function SystemSettings({ state, setState }: {
 /* ---- About settings ---- */
 
 function AboutSettings() {
-  const agents = useAgents();
-  const activeCount = agents.filter((a) => a.status === "active").length;
   const version = (import.meta.env.VITE_APP_VERSION as string | undefined) ?? "0.1.0";
   const rows = [
     { k: "Версия",  v: `Groft v${version}`, note: "desktop shell" },
     { k: "Tauri",   v: "2.0",               note: "runtime" },
     { k: "React",   v: "19",                note: "UI" },
-    { k: "Агентов", v: `${activeCount} / ${agents.length}`, note: "активных / зарегистрированных" },
+    { k: "Режим",   v: "solo opus",         note: "субагенты через Task tool" },
   ];
   return (
     <>

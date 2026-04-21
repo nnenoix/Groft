@@ -1,43 +1,18 @@
 import React from "react";
-import { Avatar, EyebrowLabel, StatusDot } from "./primitives";
 import { Icon } from "./icons";
-import { SidebarPulse } from "./SidebarPulse";
-import { SidebarUsage } from "./SidebarUsage";
-import { ComposerDock } from "./ComposerDock";
-import { ComposerModal } from "./ComposerModal";
-import { AgentDrawer } from "./AgentDrawer";
-import LogFeed from "./LogFeed";
-import { AgentsView } from "../views/AgentsView";
-import { TasksView } from "../views/TasksView";
-import { TerminalsView } from "../views/TerminalsView";
+import { SubagentsView } from "../views/SubagentsView";
 import { SettingsView, type UISettings } from "../views/SettingsView";
 import { MessengerSettingsView } from "../views/MessengerSettingsView";
-import { DecisionsView } from "../views/DecisionsView";
-import { useAgents, useLogs, useTasks, useUsage } from "../store/agentStore";
 
-export type NavView =
-  | "agents"
-  | "tasks"
-  | "terminals"
-  | "messengers"
-  | "decisions"
-  | "settings";
+export type NavView = "subagents" | "messengers" | "settings";
 
 export interface CommandCenterState {
   view: NavView;
-  focusAgent: string | null;
-  selectedAgent: string | null;
-  composerOpen: boolean;
-  gridMode: number | "all";
   uiSettings: UISettings;
 }
 
 export const INITIAL_CMD_STATE: CommandCenterState = {
-  view: "agents",
-  focusAgent: null,
-  selectedAgent: null,
-  composerOpen: false,
-  gridMode: 1,
+  view: "subagents",
   uiSettings: {
     theme: "dark",
     font: "inter",
@@ -47,39 +22,23 @@ export const INITIAL_CMD_STATE: CommandCenterState = {
   },
 };
 
-export const NAV_ITEMS: Array<{ key: NavView; label: string; Icon: (p: { size?: number }) => React.ReactElement }> = [
-  { key: "agents",     label: "Agents",     Icon: Icon.Users },
-  { key: "tasks",      label: "Tasks",      Icon: Icon.Check },
-  { key: "terminals",  label: "Terminals",  Icon: Icon.Terminal },
+export const NAV_ITEMS: Array<{
+  key: NavView;
+  label: string;
+  Icon: (p: { size?: number }) => React.ReactElement;
+}> = [
+  { key: "subagents",  label: "Субагенты",  Icon: Icon.Users },
   { key: "messengers", label: "Каналы",     Icon: Icon.Chat },
-  { key: "decisions",  label: "Decisions",  Icon: Icon.Layers },
-  { key: "settings",   label: "Settings",   Icon: Icon.Cog },
+  { key: "settings",   label: "Настройки",  Icon: Icon.Cog },
 ];
 
 interface CommandCenterLayoutProps {
   state: CommandCenterState;
   setState: (patch: Partial<CommandCenterState>) => void;
-  openCmdK: () => void;
 }
 
-export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenterLayoutProps) {
-  const agents = useAgents();
-  const tasks = useTasks();
-  const logs = useLogs();
-  const usage = useUsage();
-
-  const { view, focusAgent, selectedAgent, composerOpen, gridMode, uiSettings } = state;
-  const selectedAgentData = selectedAgent
-    ? (agents.find((a) => a.name === selectedAgent) ?? null)
-    : null;
-
-  function openTerminal(name: string) {
-    setState({ view: "terminals", focusAgent: name, selectedAgent: null });
-  }
-
-  function openAgent(name: string) {
-    setState({ selectedAgent: name });
-  }
+export function CommandCenterLayout({ state, setState }: CommandCenterLayoutProps) {
+  const { view, uiSettings } = state;
 
   function setUISettings(patch: Partial<UISettings>) {
     setState({ uiSettings: { ...uiSettings, ...patch } });
@@ -90,9 +49,12 @@ export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenter
       {/* LEFT RAIL */}
       <aside
         className="shrink-0 flex flex-col"
-        style={{ width: 280, borderRight: "1px solid var(--border)", background: "var(--bg-sidebar)" }}
+        style={{
+          width: 240,
+          borderRight: "1px solid var(--border)",
+          background: "var(--bg-sidebar)",
+        }}
       >
-        {/* Logo */}
         <div className="px-[var(--pad-4)] pt-[var(--pad-5)] pb-[var(--pad-4)] flex items-center gap-2.5">
           <div style={{ color: "var(--accent-primary)" }}>
             <Icon.Logo size={26} />
@@ -102,31 +64,11 @@ export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenter
               Groft
             </div>
             <div className="text-[10px] font-mono" style={{ color: "var(--text-muted)" }}>
-              orchestrator · v0.1.0
+              solo opus · v0.1.0
             </div>
           </div>
         </div>
 
-        {/* Search / CmdK */}
-        <div className="px-[var(--pad-4)] pb-[var(--pad-3)]">
-          <button
-            onClick={openCmdK}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-[12px] transition-colors"
-            style={{
-              background: "var(--bg-secondary)",
-              border: "1px solid var(--border)",
-              color: "var(--text-muted)",
-            }}
-          >
-            <Icon.Search size={12} /> Поиск и команды
-            <span className="ml-auto flex items-center gap-0.5">
-              <kbd>⌘</kbd>
-              <kbd>K</kbd>
-            </span>
-          </button>
-        </div>
-
-        {/* Nav */}
         <nav className="px-[var(--pad-3)] space-y-0.5">
           {NAV_ITEMS.map((n) => {
             const active = view === n.key;
@@ -142,134 +84,30 @@ export function CommandCenterLayout({ state, setState, openCmdK }: CommandCenter
                 }}
               >
                 <n.Icon size={14} /> {n.label}
-                {n.key === "tasks" && tasks.current.length > 0 && (
-                  <span
-                    className="ml-auto text-[10px] font-mono"
-                    style={{ color: active ? "var(--accent-hover)" : "var(--text-dim)" }}
-                  >
-                    {tasks.current.length}
-                  </span>
-                )}
               </button>
             );
           })}
         </nav>
 
-        {/* Pulse block */}
+        <div className="flex-1" />
+
         <div
-          className="mt-[var(--pad-3)] mx-[var(--pad-3)] px-[var(--pad-3)] py-[var(--pad-3)] rounded-[var(--radius-md)]"
-          style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}
+          className="shrink-0 px-[var(--pad-4)] py-[var(--pad-3)] text-[11px] leading-relaxed"
+          style={{ borderTop: "1px solid var(--border)", color: "var(--text-muted)" }}
         >
-          <SidebarPulse agents={agents} />
-        </div>
-
-        {/* Usage block */}
-        <div
-          className="mt-[var(--pad-3)] mx-[var(--pad-3)] px-[var(--pad-3)] py-[var(--pad-3)] rounded-[var(--radius-md)]"
-          style={{ background: "var(--bg-card)", border: "1px solid var(--border)" }}
-        >
-          <SidebarUsage rolling5h={usage.rolling_5h} weekly={usage.weekly} />
-        </div>
-
-        {/* Agent roster */}
-        <div className="mt-[var(--pad-3)] px-[var(--pad-4)] flex-1 min-h-0 overflow-y-auto">
-          <EyebrowLabel count={agents.length} className="mb-[var(--pad-2)]">
-            Roster
-          </EyebrowLabel>
-          <div className="space-y-1">
-            {agents.map((a) => {
-              const active =
-                (focusAgent === a.name && view === "terminals") || selectedAgent === a.name;
-              return (
-                <button
-                  key={a.name}
-                  onClick={() => {
-                    if (view === "terminals") setState({ focusAgent: a.name });
-                    else openAgent(a.name);
-                  }}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-left"
-                  style={{
-                    background: active ? "var(--accent-light)" : "transparent",
-                    borderLeft: `2px solid ${active ? "var(--accent-primary)" : "transparent"}`,
-                  }}
-                >
-                  <Avatar name={a.name} letter={a.avatar} size={22} />
-                  <div className="min-w-0 flex-1">
-                    <div
-                      className="text-[12px] font-medium truncate"
-                      style={{ color: active ? "var(--accent-hover)" : "var(--text-primary)" }}
-                    >
-                      {a.name}
-                    </div>
-                    <div
-                      className="text-[10px] font-mono truncate"
-                      style={{ color: "var(--text-muted)" }}
-                    >
-                      {a.currentAction}
-                    </div>
-                  </div>
-                  <StatusDot status={a.status} pulse size={6} />
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Composer dock */}
-        <div className="shrink-0 p-[var(--pad-3)]" style={{ borderTop: "1px solid var(--border)" }}>
-          <ComposerDock onOpen={() => setState({ composerOpen: true })} />
+          Opus-сессия работает в Claude Code, субагенты запускаются через Task tool.
+          Эта панель — только для настроек.
         </div>
       </aside>
 
       {/* MAIN */}
       <main className="flex-1 min-w-0 overflow-hidden flex flex-col">
-        {view === "agents" ? (
-          <AgentsView agents={agents} onOpenAgent={openAgent} onOpenTerminal={openTerminal} />
-        ) : view === "tasks" ? (
-          <TasksView tasks={tasks} />
-        ) : view === "messengers" ? (
-          <MessengerSettingsView />
-        ) : view === "decisions" ? (
-          <DecisionsView />
-        ) : view === "settings" ? (
+        {view === "subagents" && <SubagentsView />}
+        {view === "messengers" && <MessengerSettingsView />}
+        {view === "settings" && (
           <SettingsView state={uiSettings} setState={setUISettings} />
-        ) : (
-          <TerminalsView
-            agents={agents}
-            focusAgent={focusAgent}
-            onFocus={(n) => setState({ focusAgent: n })}
-            gridMode={gridMode}
-            setGridMode={(v) => setState({ gridMode: v })}
-          />
         )}
       </main>
-
-      {/* RIGHT: activity log (xl+) */}
-      {view !== "settings" && view !== "messengers" && view !== "decisions" && (
-        <aside
-          className="shrink-0 hidden xl:flex flex-col min-h-0"
-          style={{
-            width: 300,
-            borderLeft: "1px solid var(--border)",
-            background: "var(--bg-sidebar)",
-          }}
-        >
-          <div className="px-[var(--pad-4)] pt-[var(--pad-4)] pb-[var(--pad-2)] shrink-0">
-            <EyebrowLabel count={logs.length}>Activity</EyebrowLabel>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <LogFeed logs={logs} />
-          </div>
-        </aside>
-      )}
-
-      <AgentDrawer
-        agent={selectedAgentData}
-        onClose={() => setState({ selectedAgent: null })}
-        onOpenTerminal={openTerminal}
-      />
-
-      {composerOpen && <ComposerModal onClose={() => setState({ composerOpen: false })} />}
     </div>
   );
 }

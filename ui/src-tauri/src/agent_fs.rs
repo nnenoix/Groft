@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn agents_dir() -> Result<PathBuf, String> {
     let cwd = env::current_dir().map_err(|e| e.to_string())?;
@@ -56,12 +56,12 @@ pub async fn write_agent_file(
 }
 
 #[tauri::command]
-pub fn read_agent_files(dir: String) -> Result<Vec<String>, String> {
-    let p = Path::new(&dir);
-    if !p.exists() {
+pub fn list_agent_files() -> Result<Vec<String>, String> {
+    let dir = agents_dir()?;
+    if !dir.exists() {
         return Ok(Vec::new());
     }
-    let entries = fs::read_dir(p).map_err(|e| e.to_string())?;
+    let entries = fs::read_dir(&dir).map_err(|e| e.to_string())?;
     let mut out: Vec<String> = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -84,6 +84,14 @@ pub fn read_agent_files(dir: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn delete_agent_file(path: String) -> Result<(), String> {
-    fs::remove_file(Path::new(&path)).map_err(|e| e.to_string())
+pub fn delete_agent_file(name: String) -> Result<(), String> {
+    if !is_valid_agent_name(&name) {
+        return Err("invalid name: must match ^[a-z][a-z0-9-]{1,30}$".into());
+    }
+    let mut target = agents_dir()?;
+    target.push(format!("{}.md", name));
+    if !target.exists() {
+        return Err("agent file not found".into());
+    }
+    fs::remove_file(&target).map_err(|e| e.to_string())
 }
