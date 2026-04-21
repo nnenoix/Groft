@@ -166,5 +166,57 @@ async def ingest_subagent_report(
         return f"✗ ingest failed: {exc}"
 
 
+@server.tool()
+async def set_plan(goal: str, steps: list[str]) -> str:
+    """Записать новый многошаговый план в memory/current-plan.md.
+
+    Первый шаг сразу становится активным. Заменяет существующий план целиком.
+    Нужен для правила #4: прогресс виден вместо тишины.
+    """
+    try:
+        from core.step_planner import set_plan as _set
+        project_root = Path(__file__).resolve().parents[1]
+        plan = _set(goal, steps, memory_root=project_root / "memory")
+        return f"✓ plan set: {plan.progress()}"
+    except Exception as exc:
+        log.exception("set_plan failed")
+        return f"✗ set_plan failed: {exc}"
+
+
+@server.tool()
+async def advance_step() -> str:
+    """Завершить активный шаг и перейти к следующему pending.
+
+    Возвращает строку вида "step 3 of 7: <текст>" или "all N steps done".
+    """
+    try:
+        from core.step_planner import advance_step as _adv
+        project_root = Path(__file__).resolve().parents[1]
+        plan = _adv(memory_root=project_root / "memory")
+        return f"✓ advanced: {plan.progress()}"
+    except Exception as exc:
+        log.exception("advance_step failed")
+        return f"✗ advance_step failed: {exc}"
+
+
+@server.tool()
+async def get_plan() -> str:
+    """Показать текущий план и позицию в нём."""
+    try:
+        from core.step_planner import load_plan
+        project_root = Path(__file__).resolve().parents[1]
+        plan = load_plan(memory_root=project_root / "memory")
+        if plan is None:
+            return "(no current plan)"
+        lines = [f"Goal: {plan.goal}", f"Progress: {plan.progress()}", ""]
+        for i, step in enumerate(plan.steps, 1):
+            mark = {"done": "✓", "active": "→", "pending": "·"}[step.status]
+            lines.append(f"{i}. {mark} {step.text}")
+        return "\n".join(lines)
+    except Exception as exc:
+        log.exception("get_plan failed")
+        return f"✗ get_plan failed: {exc}"
+
+
 if __name__ == "__main__":
     server.run()
