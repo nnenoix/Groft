@@ -140,6 +140,7 @@ async def ingest_subagent_report(
     - memory_notes: заметки уровня «помнить всегда» — идут в shared.md.
     """
     try:
+        from core.memory_rotation import DEFAULT_KEEP
         from core.subagent_ingest import ingest_report
         dl = await _get_decision_log()
         project_root = Path(__file__).resolve().parents[1]
@@ -153,6 +154,7 @@ async def ingest_subagent_report(
             decision_appender=dl.append,
             memory_root=project_root / "memory",
             task_id=task_id,
+            rotate_keep=DEFAULT_KEEP,
         )
         dec_summary = (
             f"{len(result['decision_ids'])} decisions #"
@@ -160,7 +162,12 @@ async def ingest_subagent_report(
             if result["decision_ids"]
             else "0 decisions"
         )
-        return f"✓ ingested at {result['timestamp']}; {dec_summary}"
+        rot = result.get("rotation") or {}
+        rot_note = (
+            f"; rotated {rot['moved']} to {Path(rot['archive']).name}"
+            if rot.get("rotated") else ""
+        )
+        return f"✓ ingested at {result['timestamp']}; {dec_summary}{rot_note}"
     except Exception as exc:
         log.exception("ingest_subagent_report failed")
         return f"✗ ingest failed: {exc}"
