@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(mkdir -p ~/.claude/channels/telegram)",
-      "Read(//home/yegor/.claude/channels/**)"
+      "Read(//home/yegor/.claude/channels/**)",
+      "Bash(rm /mnt/d/orchkerstr/.claude/hooks/startup.sh)",
+      "Bash(rmdir /mnt/d/orchkerstr/.claude/hooks)"
     ]
   }
 }
