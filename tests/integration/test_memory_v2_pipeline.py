@@ -53,7 +53,7 @@ async def test_rotation_preserves_searchability(tmp_path: Path) -> None:
     live_content = (mem / "session-log.md").read_text(encoding="utf-8")
     assert unique_marker not in live_content
 
-    store = ContextStore(tmp_path / "ctx.duckdb")
+    store = ContextStore(tmp_path / "ctx_store_hint", memory_root=mem)
     store.initialize()
     try:
         count = store.reindex_agent("opus", mem)
@@ -61,8 +61,12 @@ async def test_rotation_preserves_searchability(tmp_path: Path) -> None:
 
         results = store.search("opus", unique_marker, k=5)
         assert len(results) >= 1, "marker from archived block must be searchable"
-        top = results[0]
-        assert unique_marker in top["text"]
-        assert "archive" in top["source"]
+        # Marker lives in two places: shared.md (live, aggregated) and the
+        # rotated archive block. The contract we care about is that the
+        # archived copy is reachable — not that it wins ranking.
+        assert any(
+            "archive" in r["source"] and unique_marker in r["text"]
+            for r in results
+        ), f"no archive hit in results: {[r['source'] for r in results]}"
     finally:
         store.close()

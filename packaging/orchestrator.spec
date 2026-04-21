@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_all
 PROJECT_ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir))
 
 datas, binaries, hiddenimports = [], [], []
-for pkg in ("duckdb", "watchfiles"):
+for pkg in ("watchfiles",):
     d, b, h = collect_all(pkg)
     datas += d; binaries += b; hiddenimports += h
 
