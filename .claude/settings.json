@@ -9,6 +9,10 @@
           {
             "type": "command",
             "command": "python3 /mnt/d/orchkerstr/scripts/hooks/session_start_memory_banner.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/session_start_gitignore_audit.py"
           }
         ]
       }
@@ -33,7 +37,28 @@
           },
           {
             "type": "command",
+            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_outbound_guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_dep_audit.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_secrets_scan.py"
+          },
+          {
+            "type": "command",
             "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_tests_before_commit.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Read|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_hard_deny.py"
           }
         ]
       }
@@ -45,6 +70,15 @@
           {
             "type": "command",
             "command": "python3 /mnt/d/orchkerstr/scripts/hooks/post_tool_use_plan_nudge.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/post_tool_use_outbound_audit.py"
           }
         ]
       }
