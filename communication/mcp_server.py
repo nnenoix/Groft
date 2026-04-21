@@ -167,6 +167,44 @@ async def ingest_subagent_report(
 
 
 @server.tool()
+async def save_feedback_rule(
+    rule: str,
+    why: str,
+    how_to_apply: str,
+    filename: str | None = None,
+) -> str:
+    """Записать корректировку юзера как feedback-memory.
+
+    Правило #6 (auto-learn): когда юзер поправил подход — сразу фиксировать
+    как правило в per-project auto-memory, чтобы в следующей сессии не
+    повторять ошибку. Пишет файл + строку в MEMORY.md индекс.
+
+    - rule: что именно делать / не делать (императив, одно предложение)
+    - why: причина — опишет контекст, чтобы в edge case можно было судить
+    - how_to_apply: где и когда правило срабатывает
+    - filename: опциональный стабильный stem (для идемпотентных апдейтов)
+    """
+    try:
+        from core.auto_learn import save_feedback_rule as _save
+        home = Path(os.environ.get("HOME", "/root"))
+        memory_root = (
+            home / ".claude" / "projects" / "-mnt-d-orchkerstr" / "memory"
+        )
+        result = _save(
+            rule=rule,
+            why=why,
+            how_to_apply=how_to_apply,
+            memory_root=memory_root,
+            filename=filename,
+        )
+        status = "created" if result["created"] else "updated"
+        return f"✓ feedback rule {status}: {Path(result['path']).name}"
+    except Exception as exc:
+        log.exception("save_feedback_rule failed")
+        return f"✗ save_feedback_rule failed: {exc}"
+
+
+@server.tool()
 async def set_plan(goal: str, steps: list[str]) -> str:
     """Записать новый многошаговый план в memory/current-plan.md.
 
