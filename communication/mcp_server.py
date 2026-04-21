@@ -118,5 +118,53 @@ async def reindex_my_context() -> str:
         return f"reindex failed: {exc}"
 
 
+@server.tool()
+async def ingest_subagent_report(
+    did: str,
+    changed_files: list[str] | None = None,
+    decisions: list[dict] | None = None,
+    questions: list[str] | None = None,
+    memory_notes: list[str] | None = None,
+    task_id: str | None = None,
+) -> str:
+    """Записать отчёт субагента в session-log.md + DecisionLog + shared.md.
+
+    Контракт: каждый Agent()-вызов завершается структурированным отчётом,
+    который opus передаёт сюда. Ничего не теряется после смерти суба.
+
+    - did: одно предложение «что сделал».
+    - changed_files: пути изменённых файлов.
+    - decisions: [{category, chosen, alternatives?, reason, task_id?}, ...]
+      — каждое уходит в DecisionLog, id возвращается в session-log.
+    - questions: open questions для opus.
+    - memory_notes: заметки уровня «помнить всегда» — идут в shared.md.
+    """
+    try:
+        from core.subagent_ingest import ingest_report
+        dl = await _get_decision_log()
+        project_root = Path(__file__).resolve().parents[1]
+        result = await ingest_report(
+            did=did,
+            changed_files=changed_files,
+            decisions=decisions,
+            questions=questions,
+            memory_notes=memory_notes,
+            agent=AGENT_NAME,
+            decision_appender=dl.append,
+            memory_root=project_root / "memory",
+            task_id=task_id,
+        )
+        dec_summary = (
+            f"{len(result['decision_ids'])} decisions #"
+            + ",#".join(str(i) for i in result["decision_ids"])
+            if result["decision_ids"]
+            else "0 decisions"
+        )
+        return f"✓ ingested at {result['timestamp']}; {dec_summary}"
+    except Exception as exc:
+        log.exception("ingest_subagent_report failed")
+        return f"✗ ingest failed: {exc}"
+
+
 if __name__ == "__main__":
     server.run()
