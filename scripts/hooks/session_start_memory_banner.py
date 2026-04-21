@@ -78,13 +78,14 @@ def build_banner(memory_root: Path) -> str:
         parts.append("## Long-term memory index (~/.claude auto-memory)\n\n" + index)
 
     parts.append(
-        "## Six-rule constitution\n"
+        "## Seven-rule constitution\n"
         "1. No re-explain — consult memory first.\n"
         "2. No hallucination — call Read/Grep/get_relevant_context before factual claims.\n"
         "3. No breakage — pytest before commit.\n"
         "4. Visible progress — set_plan/advance_step; announce in chat.\n"
         "5. User can intervene — pause before destructive ops.\n"
-        "6. Learn from corrections — save_feedback_rule on pushback."
+        "6. Learn from corrections — save_feedback_rule on pushback.\n"
+        "7. No secret leaks — hard-deny on ~/.ssh/.env/*.pem; curl/wget/git-push-URL need confirm; secrets scan pre-commit/pre-push."
     )
     return "\n\n".join(parts) + "\n"
 
