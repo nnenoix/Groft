@@ -241,18 +241,33 @@ pub fn append_decision_entry(
     Ok(())
 }
 
-/// Claude Code auto-memory slug: realpath with `/` replaced by `-`.
+/// Claude Code auto-memory slug: every non-ASCII-alphanumeric character in
+/// the canonical project path is replaced with `-`. On Windows this turns
+/// `D:\orchkerstr` into `D--orchkerstr` (`:` and `\` both → `-`); on Linux
+/// `/mnt/d/orchkerstr` → `-mnt-d-orchkerstr`.
+///
+/// `std::fs::canonicalize` on Windows prepends `\\?\` (extended-length
+/// prefix); we strip it before slugging so the slug matches what Claude
+/// Code actually writes under `~/.claude/projects/`.
 ///
 /// IMPORTANT: keep this derivation in sync with
 /// `scripts/hooks/session_start_memory_banner.py::_auto_memory_index_path`.
 /// If Claude Code ever changes its slug algorithm, both must update together
 /// or cross-session auto-memory splits between two directories.
+fn claude_code_slug(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    let stripped = raw
+        .strip_prefix(r"\\?\")
+        .unwrap_or_else(|| raw.as_ref());
+    stripped
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 fn auto_memory_dir(state: &State<'_, ProjectRoot>) -> Result<PathBuf, String> {
     let root = project_root::require(state)?.canonicalize().map_err(|e| e.to_string())?;
-    let slug = root
-        .to_string_lossy()
-        .replace('/', "-")
-        .replace('\\', "-");
+    let slug = claude_code_slug(&root);
     let home = dirs_home().ok_or_else(|| "home directory unresolvable".to_string())?;
     Ok(home.join(".claude").join("projects").join(slug).join("memory"))
 }
@@ -361,5 +376,46 @@ mod tests {
         assert_eq!(s.len(), 10);
         assert_eq!(&s[4..5], "-");
         assert_eq!(&s[7..8], "-");
+    }
+
+    // Observed real Claude Code slugs (from a Windows install under
+    // `~/.claude/projects/`). If any of these break, Claude Code changed
+    // its algorithm — update both Rust and Python derivations in sync.
+    #[test]
+    fn slug_linux_absolute_path() {
+        assert_eq!(
+            claude_code_slug(Path::new("/mnt/d/orchkerstr")),
+            "-mnt-d-orchkerstr"
+        );
+    }
+
+    #[test]
+    fn slug_windows_drive_root() {
+        assert_eq!(
+            claude_code_slug(Path::new(r"D:\orchkerstr")),
+            "D--orchkerstr"
+        );
+    }
+
+    #[test]
+    fn slug_windows_nested_path() {
+        assert_eq!(
+            claude_code_slug(Path::new(r"C:\Users\yegor")),
+            "C--Users-yegor"
+        );
+    }
+
+    #[test]
+    fn slug_windows_extended_length_prefix_stripped() {
+        assert_eq!(
+            claude_code_slug(Path::new(r"\\?\D:\orchkerstr")),
+            "D--orchkerstr"
+        );
+    }
+
+    #[test]
+    fn slug_preserves_ascii_alphanumerics() {
+        assert_eq!(claude_code_slug(Path::new("abc123")), "abc123");
+        assert_eq!(claude_code_slug(Path::new("Mixed_Case-9")), "Mixed-Case-9");
     }
 }

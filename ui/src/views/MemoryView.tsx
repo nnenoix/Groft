@@ -91,7 +91,13 @@ export function MemoryView() {
   }, [source]);
 
   useEffect(() => {
+    // Clear everything on source flip — otherwise a stale `selected` from the
+    // other source can race the auto-pick effect and trigger a read against
+    // a file that doesn't exist in the new source (→ os error 123 on Windows
+    // if the stale name contains characters invalid in the other namespace).
+    setFiles([]);
     setSelected(null);
+    setContent("");
     void refresh();
   }, [refresh]);
 
