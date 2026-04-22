@@ -52,13 +52,16 @@ function App() {
         mod &&
         !e.shiftKey &&
         !e.altKey &&
-        ["1", "2", "3"].includes(e.key)
+        ["1", "2", "3", "4", "5", "6"].includes(e.key)
       ) {
         e.preventDefault();
         const map: Record<string, CommandCenterState["view"]> = {
-          "1": "subagents",
-          "2": "messengers",
-          "3": "settings",
+          "1": "home",
+          "2": "memory",
+          "3": "decisions",
+          "4": "subagents",
+          "5": "messengers",
+          "6": "settings",
         };
         setStateRaw((prev) => ({ ...prev, view: map[e.key] }));
       }

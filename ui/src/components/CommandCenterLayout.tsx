@@ -1,10 +1,19 @@
 import React from "react";
 import { Icon } from "./icons";
+import { HomeView } from "../views/HomeView";
+import { MemoryView } from "../views/MemoryView";
+import { DecisionsView } from "../views/DecisionsView";
 import { SubagentsView } from "../views/SubagentsView";
 import { SettingsView, type UISettings } from "../views/SettingsView";
 import { MessengerSettingsView } from "../views/MessengerSettingsView";
 
-export type NavView = "subagents" | "messengers" | "settings";
+export type NavView =
+  | "home"
+  | "memory"
+  | "decisions"
+  | "subagents"
+  | "messengers"
+  | "settings";
 
 export interface CommandCenterState {
   view: NavView;
@@ -12,7 +21,7 @@ export interface CommandCenterState {
 }
 
 export const INITIAL_CMD_STATE: CommandCenterState = {
-  view: "subagents",
+  view: "home",
   uiSettings: {
     theme: "dark",
     font: "inter",
@@ -27,6 +36,9 @@ export const NAV_ITEMS: Array<{
   label: string;
   Icon: (p: { size?: number }) => React.ReactElement;
 }> = [
+  { key: "home",       label: "Главная",    Icon: Icon.Activity },
+  { key: "memory",     label: "Память",     Icon: Icon.Brain },
+  { key: "decisions",  label: "Решения",    Icon: Icon.GitBranch },
   { key: "subagents",  label: "Субагенты",  Icon: Icon.Users },
   { key: "messengers", label: "Каналы",     Icon: Icon.Chat },
   { key: "settings",   label: "Настройки",  Icon: Icon.Cog },
@@ -95,13 +107,16 @@ export function CommandCenterLayout({ state, setState }: CommandCenterLayoutProp
           className="shrink-0 px-[var(--pad-4)] py-[var(--pad-3)] text-[11px] leading-relaxed"
           style={{ borderTop: "1px solid var(--border)", color: "var(--text-muted)" }}
         >
-          Opus-сессия работает в Claude Code, субагенты запускаются через Task tool.
-          Эта панель — только для настроек.
+          Opus-сессия живёт в Claude Code, субагенты через Task tool.
+          Эта панель — зеркало памяти и настроек.
         </div>
       </aside>
 
       {/* MAIN */}
       <main className="flex-1 min-w-0 overflow-hidden flex flex-col">
+        {view === "home" && <HomeView />}
+        {view === "memory" && <MemoryView />}
+        {view === "decisions" && <DecisionsView />}
         {view === "subagents" && <SubagentsView />}
         {view === "messengers" && <MessengerSettingsView />}
         {view === "settings" && (
