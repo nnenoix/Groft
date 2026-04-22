@@ -107,6 +107,8 @@ def test_updated_timestamp_changes_on_advance(tmp_path: Path) -> None:
     mem = tmp_path / "memory"
     plan = set_plan("G", ["a", "b"], memory_root=mem)
     initial_updated = plan.updated
-    time.sleep(1.1)
+    # updated is second-precision — sleep >2s so we reliably cross a tick
+    # even under load (1.1s flaked under parallel-pytest load on WSL).
+    time.sleep(2.1)
     after = advance_step(memory_root=mem)
     assert after.updated != initial_updated
