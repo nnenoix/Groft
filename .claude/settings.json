@@ -8,11 +8,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/session_start_memory_banner.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/session_start_memory_banner.py"
           },
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/session_start_health_check.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/session_start_health_check.py"
           }
         ]
       }
@@ -22,7 +22,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/user_prompt_correction_nudge.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/user_prompt_correction_nudge.py"
           }
         ]
       }
@@ -33,23 +33,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_destructive_block.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/pre_tool_use_destructive_block.py"
           },
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_outbound_guard.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/pre_tool_use_outbound_guard.py"
           },
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_dep_audit.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/pre_tool_use_dep_audit.py"
           },
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_secrets_scan.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/pre_tool_use_secrets_scan.py"
           },
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_tests_before_commit.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/pre_tool_use_tests_before_commit.py"
           }
         ]
       },
@@ -58,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/pre_tool_use_hard_deny.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/pre_tool_use_hard_deny.py"
           }
         ]
       }
@@ -69,7 +69,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/post_tool_use_plan_nudge.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/post_tool_use_plan_nudge.py"
           }
         ]
       },
@@ -78,7 +78,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/post_tool_use_outbound_audit.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/post_tool_use_outbound_audit.py"
           }
         ]
       }
@@ -88,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/stop_grounding_check.py"
+            "command": "python3 $CLAUDE_PROJECT_DIR/scripts/hooks/stop_grounding_check.py"
           }
         ]
       }

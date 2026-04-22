@@ -11,13 +11,19 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from _common import project_memory_dir, read_event, write_response
+from _common import PROJECT_ROOT, project_memory_dir, read_event, write_response
 from core.constitution import context_response
 
 
-MEMORY_INDEX_HOME = (
-    Path.home() / ".claude" / "projects" / "-mnt-d-orchkerstr" / "memory" / "MEMORY.md"
-)
+def _auto_memory_index_path(project_root: Path) -> Path:
+    """Claude Code stores auto-memory at `~/.claude/projects/<slug>/memory/`
+    where `<slug>` is the project path with `/` replaced by `-`. Resolving
+    this at runtime lets the banner work on any checkout location."""
+    slug = str(project_root.resolve()).replace("/", "-").replace("\\", "-")
+    return Path.home() / ".claude" / "projects" / slug / "memory" / "MEMORY.md"
+
+
+MEMORY_INDEX_HOME = _auto_memory_index_path(PROJECT_ROOT)
 SESSION_LOG_MAX_BLOCKS = 3
 SESSION_LOG_MAX_CHARS = 4000
 
