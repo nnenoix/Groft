@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../components/icons";
 import { Avatar } from "../components/primitives";
@@ -581,6 +582,70 @@ function SystemSettings({ state, setState }: {
 
 /* ---- About settings ---- */
 
+function ProjectRootSection() {
+  const [root, setRoot] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const r = await invoke<string | null>("get_project_root");
+      setRoot(r);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function change() {
+    setError(null);
+    try {
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Выберите корень Groft-репо",
+      });
+      if (selected === null) return;
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      setBusy(true);
+      await invoke<void>("set_project_root", { path });
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <SettingsSection
+      title="Проект"
+      desc="Корень репо, из которого читается память, план и конфигурация. Смена требует перезапуска сессии Claude Code."
+    >
+      <SettingRow label="Текущий путь" hint={root ?? "не установлен"}>
+        <button onClick={change} disabled={busy} className="btn btn-outline text-[11.5px]">
+          {busy ? "…" : "Сменить"}
+        </button>
+      </SettingRow>
+      {error && (
+        <div
+          className="mx-[var(--pad-5)] mb-[var(--pad-4)] px-3 py-2 rounded-md text-[11.5px]"
+          style={{
+            background: "rgba(239, 68, 68, 0.1)",
+            color: "var(--status-stuck, #ef4444)",
+            border: "1px solid var(--status-stuck, #ef4444)",
+          }}
+        >
+          {error}
+        </div>
+      )}
+    </SettingsSection>
+  );
+}
+
 function AboutSettings() {
   const version = (import.meta.env.VITE_APP_VERSION as string | undefined) ?? "0.1.0";
   const rows = [
@@ -591,6 +656,7 @@ function AboutSettings() {
   ];
   return (
     <>
+      <ProjectRootSection />
       <SettingsSection title="О приложении">
         {rows.map((r, i) => (
           <div key={i} className="px-[var(--pad-5)] py-[var(--pad-4)] flex items-center gap-4"

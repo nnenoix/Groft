@@ -2,6 +2,7 @@ mod agent_fs;
 mod cli_detect;
 mod fs_readers;
 mod messenger;
+mod project_root;
 mod setup_runner;
 
 use std::path::Path;
@@ -89,6 +90,11 @@ pub fn run() {
                 );
             }
 
+            // Resolve project root from env or the persisted picker file and
+            // seed the shared state. UI shows the picker when this is None.
+            let initial_root = project_root::load_initial(&app.handle());
+            app.manage(project_root::ProjectRoot(std::sync::Mutex::new(initial_root)));
+
             Ok(())
         })
         .manage(setup_runner::SetupProcesses::default())
@@ -106,6 +112,9 @@ pub fn run() {
             fs_readers::read_health_report,
             messenger::save_messenger_config,
             messenger::get_messenger_status,
+            project_root::get_project_root,
+            project_root::set_project_root,
+            project_root::clear_project_root,
             setup_runner::run_setup_step,
             setup_runner::cancel_setup_step,
         ])

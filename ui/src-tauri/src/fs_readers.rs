@@ -1,25 +1,23 @@
 //! Read-only views into the running project:
 //!   memory/*.md, architecture/*.md, memory/current-plan.md,
-//!   .claudeorch/audit.log.
+//!   .claudeorch/audit.log, .claudeorch/health.json.
 //!
-//! Project root resolution uses `env::current_dir()` — same as agent_fs —
-//! which means these commands only work when the UI is launched from the
-//! repo root (dev mode). A packaged MSI would need a configurable project
-//! path; not in scope for PR-10.
+//! Project root is resolved from `ProjectRoot` state (set via the picker
+//! or the `CLAUDEORCH_PROJECT_ROOT` env var). No `env::current_dir()` any
+//! more — packaged MSI works once the user picks a root.
 //!
 //! All filenames are validated to prevent path traversal: no "..", no
 //! separators, must match `^[A-Za-z0-9][A-Za-z0-9._-]*\.md$`.
 
-use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
-const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+use tauri::State;
 
-fn project_root() -> Result<PathBuf, String> {
-    env::current_dir().map_err(|e| e.to_string())
-}
+use crate::project_root::{self, ProjectRoot};
+
+const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Filename must be a plain .md file — no traversal, no separators,
 /// no leading dot.
@@ -53,9 +51,8 @@ fn read_md_capped(path: &PathBuf) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn list_memory_files() -> Result<Vec<String>, String> {
-    let mut dir = project_root()?;
-    dir.push("memory");
+pub fn list_memory_files(state: State<'_, ProjectRoot>) -> Result<Vec<String>, String> {
+    let dir = project_root::require(&state)?.join("memory");
     let entries = match fs::read_dir(&dir) {
         Ok(e) => e,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
@@ -79,21 +76,19 @@ pub fn list_memory_files() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn read_memory_file(name: String) -> Result<String, String> {
+pub fn read_memory_file(name: String, state: State<'_, ProjectRoot>) -> Result<String, String> {
     if !is_safe_md_name(&name) {
         return Err("invalid filename".into());
     }
-    let mut path = project_root()?;
-    path.push("memory");
-    path.push(&name);
+    let path = project_root::require(&state)?.join("memory").join(&name);
     read_md_capped(&path)
 }
 
 #[tauri::command]
-pub fn read_current_plan() -> Result<Option<String>, String> {
-    let mut path = project_root()?;
-    path.push("memory");
-    path.push("current-plan.md");
+pub fn read_current_plan(state: State<'_, ProjectRoot>) -> Result<Option<String>, String> {
+    let path = project_root::require(&state)?
+        .join("memory")
+        .join("current-plan.md");
     match read_md_capped(&path) {
         Ok(s) => Ok(Some(s)),
         Err(_) if !path.exists() => Ok(None),
@@ -102,10 +97,13 @@ pub fn read_current_plan() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub fn read_audit_log_tail(max_lines: usize) -> Result<String, String> {
-    let mut path = project_root()?;
-    path.push(".claudeorch");
-    path.push("audit.log");
+pub fn read_audit_log_tail(
+    max_lines: usize,
+    state: State<'_, ProjectRoot>,
+) -> Result<String, String> {
+    let path = project_root::require(&state)?
+        .join(".claudeorch")
+        .join("audit.log");
     let content = match fs::read_to_string(&path) {
         Ok(s) => s,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(String::new()),
@@ -130,23 +128,24 @@ pub fn read_audit_log_tail(max_lines: usize) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn read_architecture_file(name: String) -> Result<String, String> {
+pub fn read_architecture_file(
+    name: String,
+    state: State<'_, ProjectRoot>,
+) -> Result<String, String> {
     if !is_safe_md_name(&name) {
         return Err("invalid filename".into());
     }
-    let mut path = project_root()?;
-    path.push("architecture");
-    path.push(&name);
+    let path = project_root::require(&state)?.join("architecture").join(&name);
     read_md_capped(&path)
 }
 
 /// Returns the JSON blob written by `session_start_health_check.py`.
 /// Null when no session has started yet (no health.json on disk).
 #[tauri::command]
-pub fn read_health_report() -> Result<Option<String>, String> {
-    let mut path = project_root()?;
-    path.push(".claudeorch");
-    path.push("health.json");
+pub fn read_health_report(state: State<'_, ProjectRoot>) -> Result<Option<String>, String> {
+    let path = project_root::require(&state)?
+        .join(".claudeorch")
+        .join("health.json");
     match fs::read_to_string(&path) {
         Ok(s) => Ok(Some(s)),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
