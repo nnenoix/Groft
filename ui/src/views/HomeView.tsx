@@ -77,20 +77,33 @@ interface HealthReport {
   checks: HealthCheck[];
 }
 
+function parseEditStreak(raw: string | null): number | null {
+  if (raw === null) return null;
+  try {
+    const data = JSON.parse(raw);
+    const n = data?.edits_since_plan;
+    return typeof n === "number" ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export function HomeView() {
   const [planRaw, setPlanRaw] = useState<string | null>(null);
   const [sessionLog, setSessionLog] = useState<string>("");
   const [auditLog, setAuditLog] = useState<string>("");
   const [healthRaw, setHealthRaw] = useState<string | null>(null);
+  const [hookStateRaw, setHookStateRaw] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [p, s, a, h] = await Promise.all([
+      const [p, s, a, h, st] = await Promise.all([
         invoke<string | null>("read_current_plan"),
         invoke<string>("read_memory_file", { name: "session-log.md" }).catch(() => ""),
         invoke<string>("read_audit_log_tail", { maxLines: 30 }),
         invoke<string | null>("read_health_report"),
+        invoke<string | null>("read_hook_state"),
       ]);
       // Same-reference check: the 5s interval should not churn re-renders
       // when the files on disk are unchanged.
@@ -98,6 +111,7 @@ export function HomeView() {
       setSessionLog((prev) => (prev === s ? prev : s));
       setAuditLog((prev) => (prev === a ? prev : a));
       setHealthRaw((prev) => (prev === h ? prev : h));
+      setHookStateRaw((prev) => (prev === st ? prev : st));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -122,13 +136,16 @@ export function HomeView() {
             Текущий план, session log, outbound audit — всё что видит конституция
           </div>
         </div>
-        <button
-          onClick={() => void refresh()}
-          className="btn btn-outline text-[11.5px] gap-1.5"
-          title="Обновить"
-        >
-          ↻ Обновить
-        </button>
+        <div className="flex items-center gap-2">
+          <EditStreakChip value={parseEditStreak(hookStateRaw)} />
+          <button
+            onClick={() => void refresh()}
+            className="btn btn-outline text-[11.5px] gap-1.5"
+            title="Обновить"
+          >
+            ↻ Обновить
+          </button>
+        </div>
       </header>
 
       {error && <ErrorBox message={error} />}
@@ -216,6 +233,38 @@ function PlanPanel({ planRaw }: { planRaw: string | null }) {
         ))}
       </ol>
     </Section>
+  );
+}
+
+function EditStreakChip({ value }: { value: number | null }) {
+  if (value === null) return null;
+  // Rule #4 (plan nudge) fires on the 5th edit without set_plan. The
+  // colour code here mirrors that threshold so the chip starts greyscale,
+  // turns amber as we approach the gate, and red when the nudge will fire
+  // on the next edit.
+  const color =
+    value >= 5
+      ? "var(--status-stuck, #ef4444)"
+      : value >= 3
+        ? "var(--status-warning, #f59e0b)"
+        : "var(--text-muted)";
+  const title =
+    value >= 5
+      ? `${value} правок без set_plan — nudge уже сработал`
+      : `${value} правок с последнего set_plan (правило #4 срабатывает с 5-й)`;
+  return (
+    <div
+      className="text-[11px] px-2 py-1 rounded-md font-mono flex items-center gap-1"
+      style={{
+        background: "var(--bg-sidebar)",
+        border: "1px solid var(--border)",
+        color,
+      }}
+      title={title}
+    >
+      <span style={{ opacity: 0.7 }}>edits</span>
+      <span style={{ fontWeight: 600 }}>{value}</span>
+    </div>
   );
 }
 

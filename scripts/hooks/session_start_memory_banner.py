@@ -18,7 +18,13 @@ from core.constitution import context_response
 def _auto_memory_index_path(project_root: Path) -> Path:
     """Claude Code stores auto-memory at `~/.claude/projects/<slug>/memory/`
     where `<slug>` is the project path with `/` replaced by `-`. Resolving
-    this at runtime lets the banner work on any checkout location."""
+    this at runtime lets the banner work on any checkout location.
+
+    IMPORTANT: keep this derivation in sync with the Rust side at
+    `ui/src-tauri/src/fs_readers.rs::auto_memory_dir`. If Claude Code ever
+    changes its slug algorithm, both must update together or cross-session
+    auto-memory splits between two directories.
+    """
     slug = str(project_root.resolve()).replace("/", "-").replace("\\", "-")
     return Path.home() / ".claude" / "projects" / slug / "memory" / "MEMORY.md"
 
