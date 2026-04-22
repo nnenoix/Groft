@@ -1,5 +1,6 @@
 mod agent_fs;
 mod cli_detect;
+mod fs_readers;
 mod messenger;
 mod setup_runner;
 
@@ -97,6 +98,11 @@ pub fn run() {
             agent_fs::list_agent_files,
             agent_fs::delete_agent_file,
             cli_detect::detect_claude_cli,
+            fs_readers::list_memory_files,
+            fs_readers::read_memory_file,
+            fs_readers::read_current_plan,
+            fs_readers::read_audit_log_tail,
+            fs_readers::read_architecture_file,
             messenger::save_messenger_config,
             messenger::get_messenger_status,
             setup_runner::run_setup_step,
