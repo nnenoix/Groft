@@ -33,6 +33,7 @@ export function DecisionsView() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -89,6 +90,9 @@ export function DecisionsView() {
               width: 200,
             }}
           />
+          <button onClick={() => setAddOpen(true)} className="btn btn-primary text-[11.5px]">
+            + Новое
+          </button>
           <button onClick={refresh} className="btn btn-outline text-[11.5px]" title="Обновить">
             ↻
           </button>
@@ -110,6 +114,16 @@ export function DecisionsView() {
           filtered.map((e, i) => <DecisionCard key={`${i}-${e.title}`} entry={e} />)
         )}
       </div>
+
+      {addOpen && (
+        <AddDecisionModal
+          onClose={() => setAddOpen(false)}
+          onSaved={() => {
+            setAddOpen(false);
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -130,5 +144,193 @@ function DecisionCard({ entry }: { entry: DecisionEntry }) {
         {entry.body.trim()}
       </pre>
     </article>
+  );
+}
+
+function AddDecisionModal({
+  onClose,
+  onSaved,
+}: {
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [category, setCategory] = useState("");
+  const [chosen, setChosen] = useState("");
+  const [why, setWhy] = useState("");
+  const [alternatives, setAlternatives] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const disabled =
+    busy || category.trim() === "" || chosen.trim() === "" || why.trim() === "";
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke<void>("append_decision_entry", {
+        category: category.trim(),
+        chosen: chosen.trim(),
+        why: why.trim(),
+        alternatives: alternatives.trim() === "" ? null : alternatives.trim(),
+      });
+      onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: "rgba(0, 0, 0, 0.6)" }}
+      onClick={onClose}
+    >
+      <div
+        className="max-w-xl w-full mx-8 rounded-xl p-6"
+        style={{
+          background: "var(--bg-secondary)",
+          border: "1px solid var(--border)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-center justify-between mb-4">
+          <h2 className="font-display text-[16px] font-semibold tracking-tight">
+            Новое решение
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-[14px]"
+            style={{ color: "var(--text-muted)" }}
+          >
+            ✕
+          </button>
+        </header>
+
+        <div className="space-y-3">
+          <Field
+            label="Категория"
+            hint="одна-две слова: например, packaging / memory / ui"
+            value={category}
+            onChange={setCategory}
+          />
+          <Field
+            label="Выбрано"
+            hint="короткое название принятого варианта"
+            value={chosen}
+            onChange={setChosen}
+          />
+          <TextArea
+            label="Почему"
+            hint="основное обоснование — 1–3 предложения"
+            value={why}
+            onChange={setWhy}
+            rows={3}
+          />
+          <TextArea
+            label="Альтернативы (опционально)"
+            hint="что рассматривали и почему отвергли"
+            value={alternatives}
+            onChange={setAlternatives}
+            rows={2}
+          />
+        </div>
+
+        {error && (
+          <div className="mt-3">
+            <ErrorBox message={error} inset={false} />
+          </div>
+        )}
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button onClick={onClose} className="btn btn-outline text-[12px]">
+            Отмена
+          </button>
+          <button
+            onClick={save}
+            disabled={disabled}
+            className="btn btn-primary text-[12px]"
+            style={{ opacity: disabled ? 0.5 : 1 }}
+          >
+            {busy ? "Сохраняю…" : "Добавить"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <label className="block text-[11.5px] uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>
+        {label}
+      </label>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-3 py-2 text-[13px] rounded-md"
+        style={{
+          background: "var(--bg-sidebar)",
+          border: "1px solid var(--border)",
+          color: "var(--text-primary)",
+        }}
+      />
+      {hint && (
+        <div className="text-[10.5px] mt-1" style={{ color: "var(--text-muted)" }}>
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TextArea({
+  label,
+  hint,
+  value,
+  onChange,
+  rows = 3,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  onChange: (v: string) => void;
+  rows?: number;
+}) {
+  return (
+    <div>
+      <label className="block text-[11.5px] uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>
+        {label}
+      </label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={rows}
+        className="w-full px-3 py-2 text-[13px] rounded-md resize-y"
+        style={{
+          background: "var(--bg-sidebar)",
+          border: "1px solid var(--border)",
+          color: "var(--text-primary)",
+        }}
+      />
+      {hint && (
+        <div className="text-[10.5px] mt-1" style={{ color: "var(--text-muted)" }}>
+          {hint}
+        </div>
+      )}
+    </div>
   );
 }

@@ -1,6 +1,10 @@
 //! Read-only views into the running project:
 //!   memory/*.md, architecture/*.md, memory/current-plan.md,
-//!   .claudeorch/audit.log, .claudeorch/health.json.
+//!   .claudeorch/audit.log, .claudeorch/health.json, hook_state.json,
+//!   and Claude Code's auto-memory under ~/.claude/projects/<slug>/memory/.
+//!
+//! Also hosts `append_decision_entry` — the one write-side command here —
+//! so the UI can add to `architecture/decisions.md` without shelling out.
 //!
 //! Project root is resolved from `ProjectRoot` state (set via the picker
 //! or the `CLAUDEORCH_PROJECT_ROOT` env var). No `env::current_dir()` any
@@ -10,8 +14,8 @@
 //! separators, must match `^[A-Za-z0-9][A-Za-z0-9._-]*\.md$`.
 
 use std::fs;
-use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
 
 use tauri::State;
 
@@ -153,6 +157,159 @@ pub fn read_health_report(state: State<'_, ProjectRoot>) -> Result<Option<String
     }
 }
 
+/// Raw JSON of `.claudeorch/hook_state.json` — rule #4's edit counter.
+/// Null when no hook has written the file yet.
+#[tauri::command]
+pub fn read_hook_state(state: State<'_, ProjectRoot>) -> Result<Option<String>, String> {
+    let path = project_root::require(&state)?
+        .join(".claudeorch")
+        .join("hook_state.json");
+    match fs::read_to_string(&path) {
+        Ok(s) => Ok(Some(s)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn today_iso() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86400) as i64;
+    // Unix epoch → date. Same civil-from-days algorithm as chrono uses;
+    // avoids pulling chrono in just for today's date.
+    let (y, m, d) = civil_from_days(days);
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let y = if m <= 2 { y + 1 } else { y } as i32;
+    (y, m, d)
+}
+
+/// Append a decision entry to architecture/decisions.md in the charter
+/// format: `## YYYY-MM-DD — <category>: <chosen>` + Why + Alternatives.
+#[tauri::command]
+pub fn append_decision_entry(
+    category: String,
+    chosen: String,
+    why: String,
+    alternatives: Option<String>,
+    state: State<'_, ProjectRoot>,
+) -> Result<(), String> {
+    let category = category.trim();
+    let chosen = chosen.trim();
+    let why = why.trim();
+    if category.is_empty() || chosen.is_empty() || why.is_empty() {
+        return Err("поля «категория», «выбрано» и «почему» обязательны".into());
+    }
+    if category.contains('\n') || chosen.contains('\n') {
+        return Err("«категория» и «выбрано» должны быть одной строкой".into());
+    }
+
+    let path = project_root::require(&state)?
+        .join("architecture")
+        .join("decisions.md");
+    fs::create_dir_all(path.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
+
+    let mut block = String::new();
+    block.push_str("\n---\n\n");
+    block.push_str(&format!("## {} — {}: {}\n\n", today_iso(), category, chosen));
+    block.push_str(&format!("**Why:** {}\n", why));
+    if let Some(alts) = alternatives.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        block.push_str(&format!("\n**Alternatives:** {}\n", alts));
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(block.as_bytes()).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Claude Code auto-memory slug: realpath with `/` replaced by `-`.
+///
+/// IMPORTANT: keep this derivation in sync with
+/// `scripts/hooks/session_start_memory_banner.py::_auto_memory_index_path`.
+/// If Claude Code ever changes its slug algorithm, both must update together
+/// or cross-session auto-memory splits between two directories.
+fn auto_memory_dir(state: &State<'_, ProjectRoot>) -> Result<PathBuf, String> {
+    let root = project_root::require(state)?.canonicalize().map_err(|e| e.to_string())?;
+    let slug = root
+        .to_string_lossy()
+        .replace('/', "-")
+        .replace('\\', "-");
+    let home = dirs_home().ok_or_else(|| "home directory unresolvable".to_string())?;
+    Ok(home.join(".claude").join("projects").join(slug).join("memory"))
+}
+
+fn dirs_home() -> Option<PathBuf> {
+    // Minimal home-dir lookup. On WSL/Linux/macOS $HOME is reliable; on
+    // Windows we fall back to %USERPROFILE%.
+    if let Ok(h) = std::env::var("HOME") {
+        if !h.is_empty() {
+            return Some(PathBuf::from(h));
+        }
+    }
+    if let Ok(h) = std::env::var("USERPROFILE") {
+        if !h.is_empty() {
+            return Some(PathBuf::from(h));
+        }
+    }
+    None
+}
+
+#[tauri::command]
+pub fn list_auto_memory_files(state: State<'_, ProjectRoot>) -> Result<Vec<String>, String> {
+    let dir = auto_memory_dir(&state)?;
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.to_string()),
+    };
+    let mut out: Vec<String> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+            if is_safe_md_name(name) && path.is_file() {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn read_auto_memory_file(
+    name: String,
+    state: State<'_, ProjectRoot>,
+) -> Result<String, String> {
+    if !is_safe_md_name(&name) {
+        return Err("invalid filename".into());
+    }
+    let path = auto_memory_dir(&state)?.join(&name);
+    read_md_capped(&path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +339,27 @@ mod tests {
     #[test]
     fn safe_name_rejects_dotfile() {
         assert!(!is_safe_md_name(".hidden.md"));
+    }
+
+    #[test]
+    fn civil_from_days_matches_known_dates() {
+        // Unix epoch
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        // Leap day
+        assert_eq!(civil_from_days(59), (1970, 3, 1));
+        // 2000-01-01 — start of century
+        assert_eq!(civil_from_days(10957), (2000, 1, 1));
+        // Round-trip a known date (don't trust the offset — trust that
+        // consecutive days produce consecutive dates)
+        let (y, m, d) = civil_from_days(20566);
+        assert!(y == 2026 && (1..=12).contains(&m) && (1..=31).contains(&d));
+    }
+
+    #[test]
+    fn today_iso_is_iso8601_date() {
+        let s = today_iso();
+        assert_eq!(s.len(), 10);
+        assert_eq!(&s[4..5], "-");
+        assert_eq!(&s[7..8], "-");
     }
 }

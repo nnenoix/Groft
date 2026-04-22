@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ErrorBox } from "../components/ErrorBox";
 
+type Source = "repo" | "auto";
+
 const PINNED_ORDER = ["MEMORY.md", "shared.md", "current-plan.md", "session-log.md"];
 
 function sortFiles(files: string[]): string[] {
@@ -23,7 +25,9 @@ function humanLabel(filename: string): string {
   return filename.replace(/\.md$/, "");
 }
 
-function classifyFile(filename: string): "pinned" | "feedback" | "project" | "user" | "reference" | "other" {
+type Category = "pinned" | "feedback" | "project" | "user" | "reference" | "other";
+
+function classifyFile(filename: string): Category {
   if (PINNED_ORDER.includes(filename)) return "pinned";
   if (filename.startsWith("feedback_")) return "feedback";
   if (filename.startsWith("project_")) return "project";
@@ -32,7 +36,7 @@ function classifyFile(filename: string): "pinned" | "feedback" | "project" | "us
   return "other";
 }
 
-const CATEGORY_LABEL: Record<ReturnType<typeof classifyFile>, string> = {
+const CATEGORY_LABEL: Record<Category, string> = {
   pinned: "Главное",
   feedback: "Feedback rules",
   project: "Project",
@@ -41,7 +45,7 @@ const CATEGORY_LABEL: Record<ReturnType<typeof classifyFile>, string> = {
   other: "Прочее",
 };
 
-const CATEGORY_ORDER: Array<ReturnType<typeof classifyFile>> = [
+const CATEGORY_ORDER: Category[] = [
   "pinned",
   "feedback",
   "project",
@@ -50,7 +54,25 @@ const CATEGORY_ORDER: Array<ReturnType<typeof classifyFile>> = [
   "other",
 ];
 
+const SOURCE_META: Record<Source, { list: string; read: string; label: string; hint: string; pathPrefix: string }> = {
+  repo: {
+    list: "list_memory_files",
+    read: "read_memory_file",
+    label: "Репо",
+    hint: "memory/*.md — grepается через MCP",
+    pathPrefix: "memory/",
+  },
+  auto: {
+    list: "list_auto_memory_files",
+    read: "read_auto_memory_file",
+    label: "Auto",
+    hint: "~/.claude/projects/<slug>/memory — кросс-сессионная",
+    pathPrefix: "~/.claude/…/memory/",
+  },
+};
+
 export function MemoryView() {
+  const [source, setSource] = useState<Source>("repo");
   const [files, setFiles] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState<string>("");
@@ -59,20 +81,20 @@ export function MemoryView() {
 
   const refresh = useCallback(async () => {
     try {
-      const list = await invoke<string[]>("list_memory_files");
+      const list = await invoke<string[]>(SOURCE_META[source].list);
       setFiles(sortFiles(list));
       setError(null);
     } catch (e) {
+      setFiles([]);
       setError(String(e));
     }
-  }, []);
+  }, [source]);
 
   useEffect(() => {
+    setSelected(null);
     void refresh();
   }, [refresh]);
 
-  // Auto-select the first file once the list arrives, and re-pick the head
-  // if the previously-selected file disappeared after a refresh.
   useEffect(() => {
     if (files.length === 0) return;
     if (selected === null || !files.includes(selected)) {
@@ -86,7 +108,7 @@ export function MemoryView() {
       return;
     }
     setLoading(true);
-    invoke<string>("read_memory_file", { name: selected })
+    invoke<string>(SOURCE_META[source].read, { name: selected })
       .then((c) => {
         setContent(c);
         setError(null);
@@ -96,13 +118,15 @@ export function MemoryView() {
         setError(String(e));
       })
       .finally(() => setLoading(false));
-  }, [selected]);
+  }, [selected, source]);
 
-  const grouped: Partial<Record<ReturnType<typeof classifyFile>, string[]>> = {};
+  const grouped: Partial<Record<Category, string[]>> = {};
   for (const f of files) {
     const cat = classifyFile(f);
     (grouped[cat] ||= []).push(f);
   }
+
+  const meta = SOURCE_META[source];
 
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -116,8 +140,9 @@ export function MemoryView() {
         >
           <h1 className="font-display text-[14px] font-semibold tracking-tight">Память</h1>
           <div className="text-[10.5px] mt-0.5" style={{ color: "var(--text-muted)" }}>
-            memory/*.md — grepается через MCP
+            {meta.hint}
           </div>
+          <SourceToggle source={source} onChange={setSource} />
         </header>
 
         <div className="py-2">
@@ -169,7 +194,7 @@ export function MemoryView() {
             </h2>
             {selected && (
               <div className="text-[10.5px] mt-0.5 font-mono" style={{ color: "var(--text-muted)" }}>
-                memory/{selected}
+                {meta.pathPrefix}{selected}
               </div>
             )}
           </div>
@@ -203,6 +228,40 @@ export function MemoryView() {
           )}
         </div>
       </main>
+    </div>
+  );
+}
+
+function SourceToggle({
+  source,
+  onChange,
+}: {
+  source: Source;
+  onChange: (s: Source) => void;
+}) {
+  const sources: Source[] = ["repo", "auto"];
+  return (
+    <div
+      className="mt-3 flex rounded-md overflow-hidden text-[11px]"
+      style={{ border: "1px solid var(--border)" }}
+    >
+      {sources.map((s) => {
+        const active = source === s;
+        return (
+          <button
+            key={s}
+            onClick={() => onChange(s)}
+            className="flex-1 py-1.5 font-mono transition-colors"
+            style={{
+              background: active ? "var(--accent-light)" : "transparent",
+              color: active ? "var(--accent-hover)" : "var(--text-muted)",
+              fontWeight: active ? 600 : 400,
+            }}
+          >
+            {SOURCE_META[s].label}
+          </button>
+        );
+      })}
     </div>
   );
 }

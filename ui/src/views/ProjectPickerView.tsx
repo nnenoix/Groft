@@ -2,6 +2,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../components/icons";
+import { ErrorBox } from "../components/ErrorBox";
 
 interface ProjectPickerViewProps {
   onPicked: (path: string) => void;
@@ -80,15 +81,8 @@ export function ProjectPickerView({ onPicked }: ProjectPickerViewProps) {
         </button>
 
         {error && (
-          <div
-            className="mt-4 px-3 py-2 rounded-md text-[12px]"
-            style={{
-              background: "rgba(239, 68, 68, 0.1)",
-              color: "var(--status-stuck, #ef4444)",
-              border: "1px solid var(--status-stuck, #ef4444)",
-            }}
-          >
-            {error}
+          <div className="mt-4">
+            <ErrorBox message={error} inset={false} />
           </div>
         )}
 

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Icon } from "../components/icons";
 import { Avatar } from "../components/primitives";
+import { ErrorBox } from "../components/ErrorBox";
 import { MODEL_OPTIONS as MODELS } from "../data/models";
 
 /* ---- Types ---- */
@@ -631,15 +632,8 @@ function ProjectRootSection() {
         </button>
       </SettingRow>
       {error && (
-        <div
-          className="mx-[var(--pad-5)] mb-[var(--pad-4)] px-3 py-2 rounded-md text-[11.5px]"
-          style={{
-            background: "rgba(239, 68, 68, 0.1)",
-            color: "var(--status-stuck, #ef4444)",
-            border: "1px solid var(--status-stuck, #ef4444)",
-          }}
-        >
-          {error}
+        <div className="mx-[var(--pad-5)] mb-[var(--pad-4)]">
+          <ErrorBox message={error} inset={false} />
         </div>
       )}
     </SettingsSection>
