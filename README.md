@@ -21,6 +21,10 @@ pytest
 The MCP server (`communication/mcp_server.py`) is started automatically
 by Claude Code from `.mcp.json` — no separate process to run.
 
+Hook paths in `.claude/settings.json` use `$CLAUDE_PROJECT_DIR` and MCP
+args are relative, so the repo runs from any clone path without edits.
+Just `git clone` → `claude` from the repo root.
+
 UI dev loop:
 
 ```bash

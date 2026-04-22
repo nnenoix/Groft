@@ -30,7 +30,9 @@
 | #7 outbound guard | `PreToolUse` (Bash) | `pre_tool_use_outbound_guard.py` | `curl`/`wget`/`scp`/`ssh`/`rsync`/`nc`/`git push` по URL → deny до подтверждения (override `# groft-user-confirmed`); localhost не считается |
 | #7 dep audit | `PreToolUse` (Bash) | `pre_tool_use_dep_audit.py` | `pip install`/`npm install`/`yarn add` → typosquat-проверка (edit distance 1 от popular name) → deny c предложением исправить |
 | #7 audit log | `PostToolUse` (Bash) | `post_tool_use_outbound_audit.py` | append в `.claudeorch/audit.log` для каждой outbound-команды: `ts\tcategory\tstatus\tcommand` |
-| #7 gitignore audit | `SessionStart` | `session_start_gitignore_audit.py` | читает `.gitignore`, находит отсутствующие `*.env`/`*.pem`/`node_modules/`/… → инжектит warning в контекст |
+| #7 + #20 health | `SessionStart` | `session_start_health_check.py` | гоняет 4 чека (hooks/mcp/gitignore/state), пишет `.claudeorch/health.json`, инжектит banner только если off-green |
+
+**Портативность путей:** hook-команды в `.claude/settings.json` используют `$CLAUDE_PROJECT_DIR`, `.mcp.json` — относительный путь к `communication/mcp_server.py`, `session_start_memory_banner.py` вычисляет slug auto-memory из `Path.cwd()`. Репо поднимается с любого пути клонирования без правки конфигов.
 
 **Context sanitization (partial):** правило #7 в чартере требует редакции секрет-паттернов перед отправкой в API. Claude Code не даёт hook на модификацию prompt перед API-send — только `UserPromptSubmit` с `additionalContext`. Поэтому реализуемо лишь частично: hard-deny не пускает `.env`/`*.pem` в `Read`, а секрет-скан не даёт таким токенам дойти до `git push`. Если секрет просочился в ответ LLM — от этого защиты в текущей архитектуре нет.
 
