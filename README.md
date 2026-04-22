@@ -1,22 +1,25 @@
 # Groft
 
-Claude-Code agent orchestration — Windows desktop app.
+Claude-Code orchestration — desktop app + MCP server for a solo-opus session.
 
 ## Install
 
 Download the latest MSI from
 [Releases](https://github.com/nnenoix/Groft/releases) and run it.
 
-See [packaging/README.md](packaging/README.md) for build/install details.
+See [packaging/README.md](packaging/README.md) for build details.
+
+**Prerequisites:** Claude CLI (`claude`) must be on PATH.
 
 ## Development
 
 ```bash
-python -m venv .venv && source .venv/bin/activate  # Linux/macOS
-# .venv\Scripts\activate                           # Windows
 pip install -r requirements-dev.txt
-pytest -v
+pytest
 ```
+
+The MCP server (`communication/mcp_server.py`) is started automatically
+by Claude Code from `.mcp.json` — no separate process to run.
 
 UI dev loop:
 
@@ -24,4 +27,5 @@ UI dev loop:
 cd ui && npm install && npm run tauri dev
 ```
 
-See [CLAUDE.md](CLAUDE.md) for architecture.
+See [CLAUDE.md](CLAUDE.md) for architecture and the seven-rule constitution
+(enforced via Claude Code hooks in `.claude/settings.json`).
