@@ -62,24 +62,42 @@ function formatRelative(iso: string | null): string {
   return `${Math.floor(diffSec / 86400)}d назад`;
 }
 
+type Severity = "green" | "yellow" | "red";
+
+interface HealthCheck {
+  name: string;
+  severity: Severity;
+  summary: string;
+  details: string[];
+}
+
+interface HealthReport {
+  generated_at: string;
+  overall: Severity;
+  checks: HealthCheck[];
+}
+
 export function HomeView() {
   const [planRaw, setPlanRaw] = useState<string | null>(null);
   const [sessionLog, setSessionLog] = useState<string>("");
   const [auditLog, setAuditLog] = useState<string>("");
+  const [healthRaw, setHealthRaw] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [p, s, a] = await Promise.all([
+      const [p, s, a, h] = await Promise.all([
         invoke<string | null>("read_current_plan"),
         invoke<string>("read_memory_file", { name: "session-log.md" }).catch(() => ""),
         invoke<string>("read_audit_log_tail", { maxLines: 30 }),
+        invoke<string | null>("read_health_report"),
       ]);
       // Same-reference check: the 5s interval should not churn re-renders
       // when the files on disk are unchanged.
       setPlanRaw((prev) => (prev === p ? prev : p));
       setSessionLog((prev) => (prev === s ? prev : s));
       setAuditLog((prev) => (prev === a ? prev : a));
+      setHealthRaw((prev) => (prev === h ? prev : h));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -116,6 +134,7 @@ export function HomeView() {
       {error && <ErrorBox message={error} />}
 
       <div className="px-[var(--pad-6)] py-[var(--pad-5)] space-y-[var(--pad-5)]">
+        <HealthPanel raw={healthRaw} />
         <PlanPanel planRaw={planRaw} />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-[var(--pad-5)]">
           <SessionLogPanel log={sessionLog} />
@@ -197,6 +216,110 @@ function PlanPanel({ planRaw }: { planRaw: string | null }) {
         ))}
       </ol>
     </Section>
+  );
+}
+
+const SEVERITY_COLOR: Record<Severity, string> = {
+  green: "var(--status-success, #10b981)",
+  yellow: "var(--status-warning, #f59e0b)",
+  red: "var(--status-stuck, #ef4444)",
+};
+
+const SEVERITY_LABEL: Record<Severity, string> = {
+  green: "OK",
+  yellow: "warn",
+  red: "fail",
+};
+
+function HealthPanel({ raw }: { raw: string | null }) {
+  if (raw === null) {
+    return (
+      <Section title="Здоровье системы" subtitle=".claudeorch/health.json">
+        <div className="text-[12.5px] py-2" style={{ color: "var(--text-muted)" }}>
+          health.json отсутствует — SessionStart hook ещё не отрабатывал.
+        </div>
+      </Section>
+    );
+  }
+
+  let report: HealthReport | null = null;
+  try {
+    report = JSON.parse(raw) as HealthReport;
+  } catch {
+    return (
+      <Section title="Здоровье системы" subtitle=".claudeorch/health.json">
+        <div className="text-[12.5px] py-2" style={{ color: "var(--status-stuck, #ef4444)" }}>
+          health.json не парсится.
+        </div>
+      </Section>
+    );
+  }
+
+  const overallColor = SEVERITY_COLOR[report.overall];
+  return (
+    <Section
+      title="Здоровье системы"
+      subtitle={`.claudeorch/health.json · ${formatRelative(report.generated_at)}`}
+      right={
+        <div
+          className="text-[11px] px-2 py-0.5 rounded-full font-mono"
+          style={{
+            background: overallColor,
+            color: "var(--bg-primary)",
+            fontWeight: 600,
+          }}
+        >
+          {SEVERITY_LABEL[report.overall]}
+        </div>
+      }
+    >
+      <div className="grid grid-cols-2 gap-2">
+        {report.checks.map((c) => (
+          <HealthCheckRow key={c.name} check={c} />
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+function HealthCheckRow({ check }: { check: HealthCheck }) {
+  const color = SEVERITY_COLOR[check.severity];
+  const hasDetails = check.details.length > 0 && check.severity !== "green";
+  return (
+    <div
+      className="rounded-md p-2"
+      style={{
+        background: "var(--bg-sidebar)",
+        border: `1px solid ${check.severity === "green" ? "var(--border)" : color}`,
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className="shrink-0 w-2 h-2 rounded-full"
+          style={{ background: color }}
+        />
+        <span className="text-[12px] font-medium" style={{ color: "var(--text-primary)" }}>
+          {check.name}
+        </span>
+        <span className="text-[11px] truncate" style={{ color: "var(--text-muted)" }}>
+          {check.summary}
+        </span>
+      </div>
+      {hasDetails && (
+        <ul className="mt-1.5 ml-4 space-y-0.5">
+          {check.details.slice(0, 4).map((d) => (
+            <li key={d} className="text-[10.5px] font-mono" style={{ color: "var(--text-muted)" }}>
+              {d}
+            </li>
+          ))}
+          {check.details.length > 4 && (
+            <li className="text-[10.5px]" style={{ color: "var(--text-muted)" }}>
+              … ещё {check.details.length - 4}
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
   );
 }
 

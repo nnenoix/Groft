@@ -140,6 +140,20 @@ pub fn read_architecture_file(name: String) -> Result<String, String> {
     read_md_capped(&path)
 }
 
+/// Returns the JSON blob written by `session_start_health_check.py`.
+/// Null when no session has started yet (no health.json on disk).
+#[tauri::command]
+pub fn read_health_report() -> Result<Option<String>, String> {
+    let mut path = project_root()?;
+    path.push(".claudeorch");
+    path.push("health.json");
+    match fs::read_to_string(&path) {
+        Ok(s) => Ok(Some(s)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

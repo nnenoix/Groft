@@ -103,6 +103,7 @@ pub fn run() {
             fs_readers::read_current_plan,
             fs_readers::read_audit_log_tail,
             fs_readers::read_architecture_file,
+            fs_readers::read_health_report,
             messenger::save_messenger_config,
             messenger::get_messenger_status,
             setup_runner::run_setup_step,
