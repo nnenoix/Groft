@@ -37,13 +37,6 @@ def logs_dir() -> Path:
     return path
 
 
-def panes_dir() -> Path:
-    """Per-agent pane log directory (Windows backend)."""
-    path = claudeorch_dir() / "panes"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
 def architecture_dir() -> Path:
     """Writable architecture docs directory."""
     path = user_data_root() / "architecture"
@@ -85,13 +78,3 @@ def handoff_dir() -> Path:
     path = Path(env).resolve() if env else user_data_root() / "ork-handoff"
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def config_path() -> Path:
-    """Writable config.yml path."""
-    return user_data_root() / "config.yml"
-
-
-def default_config_path() -> Path:
-    """Bundled read-only config.yml template."""
-    return install_root() / "config.yml"

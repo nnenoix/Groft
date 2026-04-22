@@ -575,26 +575,6 @@ function SystemSettings({ state, setState }: {
         </SettingRow>
       </SettingsSection>
 
-      <SettingsSection title="Опасная зона">
-        <SettingRow label="Перезапустить оркестр" hint="Остановит всех агентов и поднимет заново" danger>
-          <button className="btn btn-outline text-[11.5px]"
-            style={{ color: "var(--status-stuck)", borderColor: "var(--status-stuck)" }}>
-            Перезапустить
-          </button>
-        </SettingRow>
-        <SettingRow label="Сбросить настройки" hint="Удалит config.yml и вернёт дефолты" danger>
-          <button className="btn btn-outline text-[11.5px]"
-            style={{ color: "var(--status-stuck)", borderColor: "var(--status-stuck)" }}>
-            Сбросить
-          </button>
-        </SettingRow>
-        <SettingRow label="Удалить все checkpoints" hint="История сессий будет потеряна безвозвратно" danger>
-          <button className="btn btn-outline text-[11.5px]"
-            style={{ color: "var(--status-stuck)", borderColor: "var(--status-stuck)" }}>
-            <Icon.Trash size={12} /> Удалить
-          </button>
-        </SettingRow>
-      </SettingsSection>
     </>
   );
 }

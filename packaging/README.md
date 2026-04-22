@@ -1,49 +1,32 @@
-# Packaging — Groft Orchestrator Bundle
+# Packaging — Groft Desktop (Tauri)
 
-PyInstaller onedir build of the Python orchestrator. Produces a standalone
-binary that runs without a system Python install.
+Groft ships as a Tauri desktop app. The Python side (MCP server) is **not**
+bundled — Claude Code starts it automatically from `.mcp.json`, so the MSI
+only contains the UI and the seed `.claude/agents/` templates.
 
 ## Build
 
 ```
-pip install -r requirements-dev.txt
-python packaging/build_windows.py --smoke
+cd ui
+npm install
+npm run tauri build
 ```
 
-`--smoke` runs the freshly built binary with `--smoke` (early-exit, logs
-"smoke ok", exit code 0) to verify imports/native deps load. Drop the flag
-for a plain build.
+Output:
 
-Optional: `--distpath PATH` to redirect output (default `./dist`).
-
-## Output
-
-- Linux:   `dist/orchestrator/orchestrator`
-- Windows: `dist/orchestrator/orchestrator.exe`
-
-The bundle is **onedir**: the exe sits next to its DLLs, Python runtime, and
-data files (`config.yml`, `.claude/agents/`). Move the whole `orchestrator/`
-folder, not just the exe.
-
-## Run
-
-```
-./dist/orchestrator/orchestrator        # full run
-./dist/orchestrator/orchestrator --smoke  # boot-check
-```
-
-Writable runtime state (`.claudeorch/`, `memory/`) lands in CWD by default;
-override via `CLAUDEORCH_USER_DATA=<path>`.
+- Windows: `ui/src-tauri/target/release/bundle/msi/Groft_<version>_x64_en-US.msi`
+- Linux:   `ui/src-tauri/target/release/bundle/{deb,appimage}/`
+- macOS:   `ui/src-tauri/target/release/bundle/{dmg,macos}/`
 
 ## Install from release
 
-1. Download `Groft_<version>_x64_en-US.msi` (или NSIS `.exe`) from
+1. Download `Groft_<version>_x64_en-US.msi` from
    [GitHub Releases](https://github.com/nnenoix/Groft/releases).
-2. Double-click the file. Windows SmartScreen может показать warning
-   (приложение не подписано) — More info → Run anyway.
+2. Double-click. Windows SmartScreen может показать warning (приложение не
+   подписано) — More info → Run anyway.
 3. Launch "Groft" from the Start menu.
-4. On first launch, the app seeds `%APPDATA%\com.groft.app\` with default
-   config + agent definitions, then spawns the bundled orchestrator sidecar.
+4. On first launch the app seeds `%APPDATA%\com.groft.app\.claude\agents\`
+   with the bundled subagent templates.
 
 **Prerequisites:** Claude CLI (`claude`) must be on PATH. Install from
 https://docs.anthropic.com/en/docs/claude-code/.
@@ -57,6 +40,8 @@ Windows → Settings → Apps → Groft → Uninstall. User data in
 ## Notes
 
 - Windows hosts need the Visual C++ Redistributable (usually pre-installed).
-- `start.ps1` / `stop.ps1` keep working for dev mode with system Python.
 - MSI `upgradeCode` зафиксирован в `ui/src-tauri/tauri.conf.json` — не
   регенерируйте его, иначе обновления установятся рядом со старой копией.
+- No orchestrator sidecar is spawned anymore. The MCP server runs as a
+  short-lived subprocess launched by Claude Code when the user attaches
+  to a project with `.mcp.json`.
