@@ -10,6 +10,12 @@ ui/.claude/
 *.duckdb
 node_modules/
 .env
+.env.*
+*.pem
+*.key
+secrets.json
+*.log
+.DS_Store
 ork-handoff/
 dist/
 build/
