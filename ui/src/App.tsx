@@ -7,6 +7,7 @@ import {
 } from "./components/CommandCenterLayout";
 import { loadUISettings, saveUISettings } from "./hooks/useUISettings";
 import { SetupView, type CliDetectResult } from "./views/SetupView";
+import { ProjectPickerView } from "./views/ProjectPickerView";
 
 function App() {
   const [state, setStateRaw] = useState<CommandCenterState>({
@@ -14,6 +15,7 @@ function App() {
     uiSettings: loadUISettings(),
   });
   const [cliDetect, setCliDetect] = useState<CliDetectResult | null>(null);
+  const [projectRoot, setProjectRoot] = useState<string | null | undefined>(undefined);
 
   const setState = (patch: Partial<CommandCenterState>) =>
     setStateRaw((prev) => ({ ...prev, ...patch }));
@@ -28,9 +30,20 @@ function App() {
     }
   }, []);
 
+  const probeRoot = useCallback(async () => {
+    try {
+      const r = await invoke<string | null>("get_project_root");
+      setProjectRoot(r);
+    } catch (err) {
+      console.error("get_project_root failed", err);
+      setProjectRoot(null);
+    }
+  }, []);
+
   useEffect(() => {
     void probeCli();
-  }, [probeCli]);
+    void probeRoot();
+  }, [probeCli, probeRoot]);
 
   useEffect(() => {
     const h = document.documentElement;
@@ -70,12 +83,16 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  if (cliDetect === null) {
+  if (cliDetect === null || projectRoot === undefined) {
     return <div className="app-splash">Loading…</div>;
   }
 
   if (!cliDetect.installed) {
     return <SetupView detect={cliDetect} onRecheck={probeCli} />;
+  }
+
+  if (projectRoot === null) {
+    return <ProjectPickerView onPicked={(p) => setProjectRoot(p)} />;
   }
 
   return <CommandCenterLayout state={state} setState={setState} />;
