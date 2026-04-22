@@ -17,15 +17,22 @@ from core.constitution import context_response
 
 def _auto_memory_index_path(project_root: Path) -> Path:
     """Claude Code stores auto-memory at `~/.claude/projects/<slug>/memory/`
-    where `<slug>` is the project path with `/` replaced by `-`. Resolving
-    this at runtime lets the banner work on any checkout location.
+    where `<slug>` is the canonical project path with every non-alphanumeric
+    character replaced by `-`. On Windows this turns `D:\\orchkerstr` into
+    `D--orchkerstr` (both `:` and `\\` become `-`), on Linux `/mnt/d/orchkerstr`
+    → `-mnt-d-orchkerstr`.
 
     IMPORTANT: keep this derivation in sync with the Rust side at
-    `ui/src-tauri/src/fs_readers.rs::auto_memory_dir`. If Claude Code ever
+    `ui/src-tauri/src/fs_readers.rs::claude_code_slug`. If Claude Code ever
     changes its slug algorithm, both must update together or cross-session
     auto-memory splits between two directories.
     """
-    slug = str(project_root.resolve()).replace("/", "-").replace("\\", "-")
+    raw = str(project_root.resolve())
+    # Windows realpath may be prefixed with `\\?\` (extended-length); strip it
+    # before slugging so the slug matches Claude Code's on-disk layout.
+    if raw.startswith("\\\\?\\"):
+        raw = raw[4:]
+    slug = "".join(c if c.isalnum() and c.isascii() else "-" for c in raw)
     return Path.home() / ".claude" / "projects" / slug / "memory" / "MEMORY.md"
 
 
