@@ -12,31 +12,13 @@
 
 use std::env;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 fn project_root() -> Result<PathBuf, String> {
     env::current_dir().map_err(|e| e.to_string())
-}
-
-fn memory_dir() -> Result<PathBuf, String> {
-    let mut p = project_root()?;
-    p.push("memory");
-    Ok(p)
-}
-
-fn architecture_dir() -> Result<PathBuf, String> {
-    let mut p = project_root()?;
-    p.push("architecture");
-    Ok(p)
-}
-
-fn audit_log_path() -> Result<PathBuf, String> {
-    let mut p = project_root()?;
-    p.push(".claudeorch");
-    p.push("audit.log");
-    Ok(p)
 }
 
 /// Filename must be a plain .md file — no traversal, no separators,
@@ -72,22 +54,22 @@ fn read_md_capped(path: &PathBuf) -> Result<String, String> {
 
 #[tauri::command]
 pub fn list_memory_files() -> Result<Vec<String>, String> {
-    let dir = memory_dir()?;
-    if !dir.is_dir() {
-        return Ok(Vec::new());
-    }
+    let mut dir = project_root()?;
+    dir.push("memory");
+    let entries = match fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.to_string()),
+    };
     let mut out: Vec<String> = Vec::new();
-    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+    for entry in entries {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
         if path.extension().and_then(|s| s.to_str()) != Some("md") {
             continue;
         }
         if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-            if is_safe_md_name(name) {
+            if is_safe_md_name(name) && path.is_file() {
                 out.push(name.to_string());
             }
         }
@@ -101,35 +83,50 @@ pub fn read_memory_file(name: String) -> Result<String, String> {
     if !is_safe_md_name(&name) {
         return Err("invalid filename".into());
     }
-    let mut path = memory_dir()?;
+    let mut path = project_root()?;
+    path.push("memory");
     path.push(&name);
-    if !path.is_file() {
-        return Err("file not found".into());
-    }
     read_md_capped(&path)
 }
 
 #[tauri::command]
 pub fn read_current_plan() -> Result<Option<String>, String> {
-    let mut path = memory_dir()?;
+    let mut path = project_root()?;
+    path.push("memory");
     path.push("current-plan.md");
-    if !path.is_file() {
-        return Ok(None);
+    match read_md_capped(&path) {
+        Ok(s) => Ok(Some(s)),
+        Err(_) if !path.exists() => Ok(None),
+        Err(e) => Err(e),
     }
-    read_md_capped(&path).map(Some)
 }
 
 #[tauri::command]
 pub fn read_audit_log_tail(max_lines: usize) -> Result<String, String> {
-    let path = audit_log_path()?;
-    if !path.is_file() {
-        return Ok(String::new());
-    }
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let lines: Vec<&str> = content.lines().collect();
+    let mut path = project_root()?;
+    path.push(".claudeorch");
+    path.push("audit.log");
+    let content = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(String::new()),
+        Err(err) => return Err(err.to_string()),
+    };
     let cap = max_lines.max(1).min(2000);
-    let start = if lines.len() > cap { lines.len() - cap } else { 0 };
-    Ok(lines[start..].join("\n"))
+    // Counting '\n' from the end and slicing avoids the intermediate
+    // Vec<&str> that .lines().collect() would build on every poll.
+    let bytes = content.as_bytes();
+    let mut newlines = 0usize;
+    let mut start = 0usize;
+    for (i, b) in bytes.iter().enumerate().rev() {
+        if *b == b'\n' {
+            newlines += 1;
+            if newlines > cap {
+                start = i + 1;
+                break;
+            }
+        }
+    }
+    Ok(content[start..].trim_end_matches('\n').to_string())
 }
 
 #[tauri::command]
@@ -137,11 +134,9 @@ pub fn read_architecture_file(name: String) -> Result<String, String> {
     if !is_safe_md_name(&name) {
         return Err("invalid filename".into());
     }
-    let mut path = architecture_dir()?;
+    let mut path = project_root()?;
+    path.push("architecture");
     path.push(&name);
-    if !path.is_file() {
-        return Err("file not found".into());
-    }
     read_md_capped(&path)
 }
 

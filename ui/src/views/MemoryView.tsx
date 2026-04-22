@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ErrorBox } from "../components/ErrorBox";
 
 const PINNED_ORDER = ["MEMORY.md", "shared.md", "current-plan.md", "session-log.md"];
 
@@ -59,22 +60,25 @@ export function MemoryView() {
   const refresh = useCallback(async () => {
     try {
       const list = await invoke<string[]>("list_memory_files");
-      const sorted = sortFiles(list);
-      setFiles(sorted);
+      setFiles(sortFiles(list));
       setError(null);
-      if (selected === null && sorted.length > 0) {
-        setSelected(sorted[0]);
-      } else if (selected && !sorted.includes(selected)) {
-        setSelected(sorted[0] ?? null);
-      }
     } catch (e) {
       setError(String(e));
     }
-  }, [selected]);
+  }, []);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Auto-select the first file once the list arrives, and re-pick the head
+  // if the previously-selected file disappeared after a refresh.
+  useEffect(() => {
+    if (files.length === 0) return;
+    if (selected === null || !files.includes(selected)) {
+      setSelected(files[0]);
+    }
+  }, [files, selected]);
 
   useEffect(() => {
     if (!selected) {
@@ -178,18 +182,7 @@ export function MemoryView() {
           </button>
         </header>
 
-        {error && (
-          <div
-            className="mx-[var(--pad-6)] mt-[var(--pad-4)] px-3 py-2 rounded-md text-[12px]"
-            style={{
-              background: "rgba(239, 68, 68, 0.1)",
-              color: "var(--status-stuck, #ef4444)",
-              border: "1px solid var(--status-stuck, #ef4444)",
-            }}
-          >
-            {error}
-          </div>
-        )}
+        {error && <ErrorBox message={error} />}
 
         <div className="px-[var(--pad-6)] py-[var(--pad-5)]">
           {loading ? (

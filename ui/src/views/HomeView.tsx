@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ErrorBox } from "../components/ErrorBox";
 
 interface Step {
   text: string;
@@ -62,7 +63,6 @@ function formatRelative(iso: string | null): string {
 }
 
 export function HomeView() {
-  const [plan, setPlan] = useState<ParsedPlan | null>(null);
   const [planRaw, setPlanRaw] = useState<string | null>(null);
   const [sessionLog, setSessionLog] = useState<string>("");
   const [auditLog, setAuditLog] = useState<string>("");
@@ -75,10 +75,11 @@ export function HomeView() {
         invoke<string>("read_memory_file", { name: "session-log.md" }).catch(() => ""),
         invoke<string>("read_audit_log_tail", { maxLines: 30 }),
       ]);
-      setPlanRaw(p);
-      setPlan(p ? parsePlan(p) : null);
-      setSessionLog(s);
-      setAuditLog(a);
+      // Same-reference check: the 5s interval should not churn re-renders
+      // when the files on disk are unchanged.
+      setPlanRaw((prev) => (prev === p ? prev : p));
+      setSessionLog((prev) => (prev === s ? prev : s));
+      setAuditLog((prev) => (prev === a ? prev : a));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -90,10 +91,6 @@ export function HomeView() {
     const id = setInterval(refresh, 5000);
     return () => clearInterval(id);
   }, [refresh]);
-
-  const completed = plan?.steps.filter((s) => s.status === "done").length ?? 0;
-  const total = plan?.steps.length ?? 0;
-  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
 
   return (
     <div className="flex-1 overflow-auto">
@@ -116,21 +113,10 @@ export function HomeView() {
         </button>
       </header>
 
-      {error && (
-        <div
-          className="mx-[var(--pad-6)] mt-[var(--pad-4)] px-3 py-2 rounded-md text-[12px]"
-          style={{
-            background: "var(--status-stuck-bg, rgba(239, 68, 68, 0.1))",
-            color: "var(--status-stuck)",
-            border: "1px solid var(--status-stuck)",
-          }}
-        >
-          {error}
-        </div>
-      )}
+      {error && <ErrorBox message={error} />}
 
       <div className="px-[var(--pad-6)] py-[var(--pad-5)] space-y-[var(--pad-5)]">
-        <PlanPanel plan={plan} planRaw={planRaw} pct={pct} completed={completed} total={total} />
+        <PlanPanel planRaw={planRaw} />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-[var(--pad-5)]">
           <SessionLogPanel log={sessionLog} />
           <AuditLogPanel log={auditLog} />
@@ -140,19 +126,7 @@ export function HomeView() {
   );
 }
 
-function PlanPanel({
-  plan,
-  planRaw,
-  pct,
-  completed,
-  total,
-}: {
-  plan: ParsedPlan | null;
-  planRaw: string | null;
-  pct: number;
-  completed: number;
-  total: number;
-}) {
+function PlanPanel({ planRaw }: { planRaw: string | null }) {
   if (!planRaw) {
     return (
       <Section title="Текущий план" subtitle="memory/current-plan.md">
@@ -163,10 +137,15 @@ function PlanPanel({
     );
   }
 
+  const plan = parsePlan(planRaw);
+  const total = plan.steps.length;
+  const completed = plan.steps.filter((s) => s.status === "done").length;
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
   return (
     <Section
       title="Текущий план"
-      subtitle={`memory/current-plan.md · обновлён ${formatRelative(plan?.updated ?? null)}`}
+      subtitle={`memory/current-plan.md · обновлён ${formatRelative(plan.updated)}`}
       right={
         total > 0 && (
           <div className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--text-muted)" }}>
@@ -191,13 +170,13 @@ function PlanPanel({
         )
       }
     >
-      {plan?.goal && (
+      {plan.goal && (
         <div className="text-[13px] font-medium mb-3" style={{ color: "var(--text-primary)" }}>
           {plan.goal}
         </div>
       )}
       <ol className="space-y-1.5">
-        {plan?.steps.map((s, i) => (
+        {plan.steps.map((s, i) => (
           <li key={i} className="flex items-start gap-2 text-[12.5px]">
             <StepMarker status={s.status} />
             <span
@@ -301,6 +280,11 @@ function AuditLogPanel({ log }: { log: string }) {
   );
 }
 
+const AUDIT_STATUS_COLOR: Record<string, string> = {
+  allow: "var(--text-muted)",
+  deny: "var(--status-stuck, #ef4444)",
+};
+
 function AuditLine({ line }: { line: string }) {
   const parts = line.split("\t");
   if (parts.length < 4) {
@@ -314,12 +298,7 @@ function AuditLine({ line }: { line: string }) {
   }
   const [ts, category, status, ...cmdParts] = parts;
   const cmd = cmdParts.join("\t");
-  const statusColor =
-    status === "allow"
-      ? "var(--text-muted)"
-      : status === "deny"
-        ? "var(--status-stuck, #ef4444)"
-        : "var(--text-secondary)";
+  const statusColor = AUDIT_STATUS_COLOR[status] ?? "var(--text-secondary)";
   return (
     <tr style={{ borderBottom: "1px solid var(--border)" }}>
       <td className="px-2 py-1 whitespace-nowrap" style={{ color: "var(--text-muted)", fontSize: "10px" }}>

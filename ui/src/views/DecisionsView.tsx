@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ErrorBox } from "../components/ErrorBox";
 
 const HEADING_RE = /^##\s+(.+)$/;
 
@@ -94,18 +95,7 @@ export function DecisionsView() {
         </div>
       </header>
 
-      {error && (
-        <div
-          className="mx-[var(--pad-6)] mt-[var(--pad-4)] px-3 py-2 rounded-md text-[12px]"
-          style={{
-            background: "rgba(239, 68, 68, 0.1)",
-            color: "var(--status-stuck, #ef4444)",
-            border: "1px solid var(--status-stuck, #ef4444)",
-          }}
-        >
-          {error}
-        </div>
-      )}
+      {error && <ErrorBox message={error} />}
 
       <div className="px-[var(--pad-6)] py-[var(--pad-5)] space-y-[var(--pad-4)]">
         {loading ? (
