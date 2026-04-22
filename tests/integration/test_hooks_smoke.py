@@ -504,17 +504,18 @@ def test_outbound_audit_silent_on_local_command(tmp_path: Path) -> None:
     assert not (tmp_path / ".claudeorch" / "audit.log").exists()
 
 
-# ---- session_start_gitignore_audit (Rule #7) --------------------
+# ---- session_start_health_check (Phase 20) ----------------------
 
-def test_gitignore_audit_returns_empty_on_full_coverage(tmp_path: Path) -> None:
-    # The real project has a full .gitignore — smoke test: either
-    # empty output (no gaps) or context with "gitignore audit". Both
-    # are valid; just check the script runs and JSON is well-formed.
+def test_health_check_runs_and_output_shape_is_sane(tmp_path: Path) -> None:
+    # The health hook replaced the narrower gitignore_audit. Smoke test:
+    # either empty stdout (everything green) or a JSON envelope with
+    # additionalContext containing the banner header.
     result = _run(
-        "session_start_gitignore_audit.py",
+        "session_start_health_check.py",
         {"hook_event_name": "SessionStart", "source": "startup"},
     )
     assert result.returncode == 0
     if result.stdout.strip():
         payload = json.loads(result.stdout)
         assert "additionalContext" in payload
+        assert "Startup observability" in payload["additionalContext"]

@@ -12,7 +12,7 @@
           },
           {
             "type": "command",
-            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/session_start_gitignore_audit.py"
+            "command": "python3 /mnt/d/orchkerstr/scripts/hooks/session_start_health_check.py"
           }
         ]
       }
